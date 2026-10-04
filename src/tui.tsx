@@ -92,6 +92,15 @@ export default Plugin.define({
     const timer = setInterval(() => {
       setNow(Date.now())
       statsSource.checkMidnightRollover()
+      // v0.7.11: the host TUI paints on demand — updating the renderable
+      // tree alone never refreshes the screen. Request a repaint on every
+      // tick so the footer ⏱ / sidebar block keep walking while idle, and
+      // any stats or settings change becomes visible within 500ms even
+      // when nothing else drives a host repaint (OMO-Slim requests one
+      // after every snapshot update for the same reason).
+      try {
+        context.renderer?.requestRender?.()
+      } catch {}
     }, 500)
 
     const subs: Array<() => void> = []

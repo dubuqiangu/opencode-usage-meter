@@ -22,7 +22,14 @@
 // the same prop pipeline JSX uses, so <box onMouseUp={...}> lands on the
 // core node identically. The collapsed state persists in the settings
 // store (statsBlockCollapsed) and survives restarts.
-import { createMemo } from "solid-js"
+//
+// v0.7.11 real-time repaint: the host TUI paints on demand — a reactive
+// tree update alone never refreshes the screen; someone must call
+// renderer.requestRender(). The 500ms tick in tui.tsx requests a repaint
+// on every fire, and the header click flips a local collapsed signal and
+// requests one immediately, so ▼/▸ toggles instantly instead of waiting
+// for a host-driven repaint (e.g. a session switch).
+import { createMemo, createSignal } from "solid-js"
 import { fmtNum, format } from "../format"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
@@ -65,6 +72,12 @@ export function createSidebarMetrics(deps: {
     // history yet — replay the last turn from synced records once (guarded,
     // so repeated host re-mounts stay no-ops).
     backfillLastTurn(sessionID)
+    // v0.7.11: local mirror of the persisted collapsed flag. The click
+    // flips this signal synchronously (instant memo re-run + repaint),
+    // then persists through the settings store — the store write alone
+    // may not be reactive, and the host only repaints on request anyway.
+    // Re-mounts (session switch / restart) re-init from the store.
+    const [isCollapsed, setIsCollapsed] = createSignal(statsBlockCollapsed())
     // v0.7.8/0.7.9: every dynamic read (now(), session status, stats
     // signals, settings signals, collapsed flag) lives inside the memo, so
     // the interpolations below re-render on each 500ms tick, on every stats
@@ -74,7 +87,7 @@ export function createSidebarMetrics(deps: {
     // storage store turns out not to be reactive.
     const blockState = createMemo(() => {
       const currentTime = now()
-      const collapsed = statsBlockCollapsed()
+      const collapsed = isCollapsed()
       let metricText: string | null = null
       if (!collapsed) {
         const running = context.data?.session?.status?.(sessionID) === "running"
@@ -145,7 +158,17 @@ export function createSidebarMetrics(deps: {
         <box
           flexDirection="row"
           width="100%"
-          onMouseUp={() => toggleSettingsFlag("statsBlockCollapsed", blockState().collapsed)}
+          onMouseUp={() => {
+            const wasCollapsed = isCollapsed()
+            setIsCollapsed(!wasCollapsed)
+            toggleSettingsFlag("statsBlockCollapsed", wasCollapsed)
+            // Instant feedback: the signal flip re-runs the memo now, and
+            // the explicit repaint request makes it visible immediately
+            // instead of waiting for the next 500ms tick.
+            try {
+              context.renderer?.requestRender?.()
+            } catch {}
+          }}
         >
           {/* v0.7.10: the label text opts out of text selection
               (TextRenderable is selectable by default), so a header click

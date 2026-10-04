@@ -31,6 +31,8 @@
 
 0.7.10 修正:槽位渲染层用**函数子节点**包裹(`<box width="100%" flexDirection="column">{() => <SidebarMetrics/>}</box>`)。@opentui/solid 的 reconciler 对函数子节点建 `createRenderEffect`(0.4.5/0.5.14 两版源码均确认,`insertExpression` 的 `t === "function"` 分支),组件体内读到的 memo/`now()` signal 从此全程被跟踪,signal 一变即重绘。与 OMO-Slim 的 `reactiveElement`(`insert(root, renderFn)`)同款模式。footer 段同步修复(`<text>{() => statusText()}</text>`),空闲 ⏱ 不再依赖宿主输入驱动的重绘。
 
+0.7.11 补最后一环:**宿主 TUI 按需绘制**。signal → 跟踪 effect → renderable 树更新,都不触发屏幕刷新;屏幕只在有人调 `renderer.requestRender()` 时重绘(OMO-Slim 每次 `setSnapshot` 后都显式请求,这是它"实时"的直接原因)。0.7.10 真机表现"点击生效但要切 session 才可见"正是此因:树早已翻转,画面等宿主自身重绘。修复:tui.tsx 的 500ms tick 每次显式 `context.renderer?.requestRender?.()`——空闲 ⏱ 走秒、60s 统计拉取与任何设置变更 ≤500ms 内可见。
+
 ## 开关
 
 `/usage-settings` 内按 `b` 切换(默认开);关闭后整块消失。生命周期纳入插件清理。
@@ -40,3 +42,5 @@
 点击 `▼/▸ Stats` 头部行切换收起:收起后只保留 `▸ Stats` 头部,指标行隐藏;再点恢复。状态经 `statsBlockCollapsed` 键持久化(缺键 = 展开),重启后保持。与 `b` 开关互不影响:`b` 控制整块有无,收起只折叠内容。
 
 实现:全宽头部行 box 挂 JSX `onMouseUp`(经无头实证与 OMO-Slim 的 setProp 命令式挂法等价:插件安装目录 @opentui 0.5.14 全栈 + `createMockMouse` 模拟点击,JSX prop / ref+setProp / 带背景行三种挂法全部正常触发),头部标签 `selectable={false}`(TextRenderable 继承 TextBufferRenderable、selectable 默认 true,退出文本选区路径保证点击语义干净)。0.7.9 真机"点击无反应"的根因不是鼠标事件,而是上面 0.7.10 的刷新断裂——点击其实已翻转 store,界面从不重绘。另:测试任何新版本必须**完整重启 TUI**,`/reload` 会拆除旧实例接线并留下重复实例(见 guides/install.md)。
+
+0.7.11 即时翻转:点击处理器先翻转**本地 `isCollapsed` signal**(同步驱动 memo → renderable 树即时更新),再持久化写 store(`toggleSettingsFlag`),最后立即 `requestRender()` 请求重绘——不等 500ms tick,点击即刻 ▼↔▸(OMO-Slim 同款交互链:本地信号即时 + 显式重绘请求)。挂载/重挂载时从 store 读取器重新初始化本地信号,重启后保持持久化状态。
