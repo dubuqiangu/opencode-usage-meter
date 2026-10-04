@@ -129,7 +129,12 @@ export function createFooterStatus(deps: {
     // rule; afterwards the interpolation keeps the text live.
     if (statusText() === null) return null
     const muted = context.theme?.text?.muted
-    return <text fg={muted}>{statusText()}</text>
+    // v0.7.10: function child instead of an eagerly evaluated string —
+    // insertExpression wraps it in a tracked render effect, so the 500ms
+    // now() tick re-renders the segment even when the host itself never
+    // re-invokes the footer slot render (previously the footer only
+    // looked live thanks to the host's frequent input-driven re-renders).
+    return <text fg={muted}>{() => statusText()}</text>
   }
 
   return { FooterStatus }

@@ -124,10 +124,19 @@ export default Plugin.define({
     try {
       unregisterSidebarSlot = context.ui.slot({
         append: "sidebar.content",
+        // v0.7.10: the host slot render does not track signal reads from a
+        // directly returned element, so the block never re-rendered on its
+        // own — the idle ⏱ froze and 0.7.9 header clicks flipped the store
+        // without any visible change. Wrapping the component in a function
+        // child lets the reconciler's insertExpression build a tracked
+        // render effect — the same reactiveElement pattern OMO-Slim ships
+        // for its sidebar rows.
         render: (sidebarProps: any) =>
-          sidebarProps?.sessionID
-            ? <SidebarMetrics sessionID={sidebarProps.sessionID} />
-            : null,
+          sidebarProps?.sessionID ? (
+            <box width="100%" flexDirection="column">
+              {() => <SidebarMetrics sessionID={sidebarProps.sessionID} />}
+            </box>
+          ) : null,
       })
     } catch (error) {
       console.error("[usage-meter] sidebar.content slot failed:", error)

@@ -25,14 +25,18 @@
 
 设计约束:右栏为窄列,单行并排会挤压换行,故 ⏱/⚡ 分行;范围标注统一括号后缀。计时/速率行与 footer 同数据同口径,含 0.7.5 冷启动回填(重开终端接手的会话立即可见上轮终值)。
 
-## 刷新机制(0.7.8)
+## 刷新机制(0.7.8 → 0.7.10 修正)
 
-所有行文本在 `createMemo` 内计算、由 JSX 插值读取——500ms tick(`now` 信号)、📊/🎯 的 stats 信号、设置信号的变化都直接触发重绘。0.7.7 及以前文本在组件函数体内预计算(每次挂载只跑一次),宿主只在切换会话/消息变化时重挂侧边栏,因此**停在同一会话空闲时整块冻结**(📊 不随 60s 后台拉取变化、⚡ 滑窗过期后流恢复也不重新出现),切换会话才刷新——0.7.8 起这两类现象消除。
+所有行文本在 `createMemo` 内计算,由 JSX 读取。0.7.8 把动态读取挪进 memo 的方向正确,但漏了最后一环:**宿主 `ui.slot` 的 render 返回元素后不建立任何跟踪 effect**——esbuild `--jsx=automatic` 下插值在组件调用时一次性求值,signal(500ms tick、stats、设置)变了也无人重绘。真机实证:同一会话空闲时右栏 ⏱ 不走秒(0.7.8 只在有活动时被宿主事件驱动的重挂掩盖)。
+
+0.7.10 修正:槽位渲染层用**函数子节点**包裹(`<box width="100%" flexDirection="column">{() => <SidebarMetrics/>}</box>`)。@opentui/solid 的 reconciler 对函数子节点建 `createRenderEffect`(0.4.5/0.5.14 两版源码均确认,`insertExpression` 的 `t === "function"` 分支),组件体内读到的 memo/`now()` signal 从此全程被跟踪,signal 一变即重绘。与 OMO-Slim 的 `reactiveElement`(`insert(root, renderFn)`)同款模式。footer 段同步修复(`<text>{() => statusText()}</text>`),空闲 ⏱ 不再依赖宿主输入驱动的重绘。
 
 ## 开关
 
 `/usage-settings` 内按 `b` 切换(默认开);关闭后整块消失。生命周期纳入插件清理。
 
-## 收起(0.7.9)
+## 收起(0.7.9 → 0.7.10 修复"点击无反应")
 
-点击 `▼/▸ Stats` 头部行切换收起:收起后只保留 `▸ Stats` 头部,指标行隐藏;再点恢复。状态经 `statsBlockCollapsed` 键持久化(缺键 = 展开),重启后保持。实现方式与 OMO-Slim 区块一致:全宽头部行 box 挂 `onMouseUp`(`@opentui/solid` 的 setProp 同一 prop 通道,JSX 写法等价),鼠标事件由 @opentui/core 提供。与 `b` 开关互不影响:`b` 控制整块有无,收起只折叠内容。
+点击 `▼/▸ Stats` 头部行切换收起:收起后只保留 `▸ Stats` 头部,指标行隐藏;再点恢复。状态经 `statsBlockCollapsed` 键持久化(缺键 = 展开),重启后保持。与 `b` 开关互不影响:`b` 控制整块有无,收起只折叠内容。
+
+实现:全宽头部行 box 挂 JSX `onMouseUp`(经无头实证与 OMO-Slim 的 setProp 命令式挂法等价:插件安装目录 @opentui 0.5.14 全栈 + `createMockMouse` 模拟点击,JSX prop / ref+setProp / 带背景行三种挂法全部正常触发),头部标签 `selectable={false}`(TextRenderable 继承 TextBufferRenderable、selectable 默认 true,退出文本选区路径保证点击语义干净)。0.7.9 真机"点击无反应"的根因不是鼠标事件,而是上面 0.7.10 的刷新断裂——点击其实已翻转 store,界面从不重绘。另:测试任何新版本必须**完整重启 TUI**,`/reload` 会拆除旧实例接线并留下重复实例(见 guides/install.md)。

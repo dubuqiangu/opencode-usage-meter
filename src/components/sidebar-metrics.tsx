@@ -147,7 +147,11 @@ export function createSidebarMetrics(deps: {
           width="100%"
           onMouseUp={() => toggleSettingsFlag("statsBlockCollapsed", blockState().collapsed)}
         >
-          <text fg={base}>{`${blockState().collapsed ? "▸" : "▼"} Stats`}</text>
+          {/* v0.7.10: the label text opts out of text selection
+              (TextRenderable is selectable by default), so a header click
+              can never start a selection and the toggle semantics stay
+              clean. */}
+          <text fg={base} selectable={false}>{`${blockState().collapsed ? "▸" : "▼"} Stats`}</text>
         </box>
         {blockState().collapsed ? null : <text fg={muted}>{blockState().metricText}</text>}
       </box>
