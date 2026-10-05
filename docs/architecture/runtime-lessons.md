@@ -11,7 +11,7 @@
 | 问题 | 根因 | 修复 |
 |---|---|---|
 | Σ/hit 从未显示 | openapi operationId 是 `experimental.session.stats`,但 v2.0.x effect 客户端把 `stats` 挂在 `SessionApi`(`client.session.stats`);`client.experimental.session.stats` 不存在 → `statsFailed` 一次性永久失败 | 候选路径数组依次探测;`from/to` 改传 number(effect schema 运行时校验拒绝字符串) |
-| 客户端未就绪即判死 | setup 时 client 方法可能尚未注入 | 缺失方法改 30s 定时重试(仅日志一次);硬失败闸门保留(跨零点复位) |
+| 客户端未就绪即判死 | setup 时 client 方法可能尚未注入 | 缺失方法改 30s 定时重试(仅日志一次);硬失败闸门保留(跨零点复位)。注:该闸门已于 0.7.13 删除——第三轮审视发现其从未有置 true 的写点,为死代码 |
 | `/usage-full` 从未注册 | `context.keymap.layer()` 在 `setup()` 直接调用抛 `Keymap.Provider is missing`(keymap 层必须从组件作用域创建);try/catch 吞掉异常 → 命令静默丢失 | 改经 `app` slot render(组件作用域)内注册,一次性 guard,失败置 `null` 防重复注册 |
 
 ## 0.6.5:空闲速率偏差(63 vs 70.5)
