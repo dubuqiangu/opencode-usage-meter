@@ -292,6 +292,14 @@ export function createPanelContent(deps: {
         `${todayHit !== undefined ? `  命中 ${todayHit}%` : ""}` +
         `${todayCost ? ` · ${todayCost}` : ""}`,
     )
+    // v0.7.14: cache-inclusive grand total — reconciliation line for the
+    // "total tokens" reading (answers that sum cache.read, e.g. asking the
+    // model directly). The Σ/📊 metric deliberately excludes cache
+    // (different cost structure); this line makes both readings derivable
+    // from one view without switching tools.
+    lines.push(
+      `  含缓存总量 ${fmtNum(sumTokens(tk))}(含 cache R/W · Σ/📊 口径不含 cache)`,
+    )
 
     lines.push("")
     lines.push("── 近 7 日(steps) ──")
