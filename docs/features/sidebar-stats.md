@@ -35,7 +35,7 @@
 
 ## 开关
 
-`/usage-settings` 内按 `b` 切换(默认开);关闭后整块消失。生命周期纳入插件清理。
+`/usage-settings` 内按 `b` 切换(默认开);关闭后整块消失。开关为挂载期判定——翻转 store 后在宿主**下一次重挂右栏**(切会话/侧栏状态变化)时生效,非即时响应式拆除。生命周期纳入插件清理。
 
 ## 收起(0.7.9 → 0.7.10 修复"点击无反应")
 
@@ -44,3 +44,5 @@
 实现:全宽头部行 box 挂 JSX `onMouseUp`(经无头实证与 OMO-Slim 的 setProp 命令式挂法等价:插件安装目录 @opentui 0.5.14 全栈 + `createMockMouse` 模拟点击,JSX prop / ref+setProp / 带背景行三种挂法全部正常触发),头部标签 `selectable={false}`(TextRenderable 继承 TextBufferRenderable、selectable 默认 true,退出文本选区路径保证点击语义干净)。0.7.9 真机"点击无反应"的根因不是鼠标事件,而是上面 0.7.10 的刷新断裂——点击其实已翻转 store,界面从不重绘。另:测试任何新版本必须**完整重启 TUI**,`/reload` 会拆除旧实例接线并留下重复实例(见 guides/install.md)。
 
 0.7.11 即时翻转:点击处理器先翻转**本地 `isCollapsed` signal**(同步驱动 memo → renderable 树即时更新),再持久化写 store(`toggleSettingsFlag`),最后立即 `requestRender()` 请求重绘——不等 500ms tick,点击即刻 ▼↔▸(OMO-Slim 同款交互链:本地信号即时 + 显式重绘请求)。挂载/重挂载时从 store 读取器重新初始化本地信号,重启后保持持久化状态。
+
+0.7.12 跨实例回读:0.7.11 的本地镜像此前是 memo 的唯一数据源,"镜像持久值"名不副实——另一 TUI 实例翻转的收起态在本实例永不体现。修复:memo 现在回读持久读取器 `statsBlockCollapsed()`,仅在本地点击后 **2s 窗口内**(`lastLocalFlipAt` 时间戳)信任本地 signal(吸收 store 写异步落地、防回跳),其后持久值接管——跨实例同步在 ≤500ms tick 内恢复生效。

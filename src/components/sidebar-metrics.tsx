@@ -76,8 +76,16 @@ export function createSidebarMetrics(deps: {
     // flips this signal synchronously (instant memo re-run + repaint),
     // then persists through the settings store — the store write alone
     // may not be reactive, and the host only repaints on request anyway.
-    // Re-mounts (session switch / restart) re-init from the store.
+    // v0.7.12: the memo no longer trusts the local signal exclusively —
+    // that made the "mirrors the persisted flag" claim hollow, since a
+    // collapse flipped in another TUI instance never showed up here. The
+    // memo re-reads the persisted reader and only defers to the local
+    // flip for a 2s window after a click (lastLocalFlipAt), which absorbs
+    // the store write's async landing without bouncing the header back;
+    // afterwards the persisted value wins, so cross-instance sync recovers
+    // within the next 500ms tick.
     const [isCollapsed, setIsCollapsed] = createSignal(statsBlockCollapsed())
+    let lastLocalFlipAt = 0
     // v0.7.8/0.7.9: every dynamic read (now(), session status, stats
     // signals, settings signals, collapsed flag) lives inside the memo, so
     // the interpolations below re-render on each 500ms tick, on every stats
@@ -87,7 +95,12 @@ export function createSidebarMetrics(deps: {
     // storage store turns out not to be reactive.
     const blockState = createMemo(() => {
       const currentTime = now()
-      const collapsed = isCollapsed()
+      // v0.7.12: the persisted reader wins outside the 2s local-flip window
+      // (see the comment above the signal); inside it the synchronous local
+      // signal hides the store write's async landing. Both clocks are within
+      // 500ms of each other, so Date.now() vs the tick value is equivalent.
+      const persistedCollapsed = statsBlockCollapsed()
+      const collapsed = Date.now() - lastLocalFlipAt < 2_000 ? isCollapsed() : persistedCollapsed
       let metricText: string | null = null
       if (!collapsed) {
         const running = context.data?.session?.status?.(sessionID) === "running"
@@ -161,6 +174,9 @@ export function createSidebarMetrics(deps: {
           onMouseUp={() => {
             const wasCollapsed = isCollapsed()
             setIsCollapsed(!wasCollapsed)
+            // Open the 2s window where the local flip shadows the persisted
+            // value (the store write below may land asynchronously).
+            lastLocalFlipAt = Date.now()
             toggleSettingsFlag("statsBlockCollapsed", wasCollapsed)
             // Instant feedback: the signal flip re-runs the memo now, and
             // the explicit repaint request makes it visible immediately

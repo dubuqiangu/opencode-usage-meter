@@ -89,6 +89,21 @@ export function createFooterStatus(deps: {
       // configurable: "today" (all-session daily aggregate, read/(read+input))
       // or "session" (strict read/(input+read+write), shown as "hit·s").
       // Reads are reactive: toggling updates at once.
+      // v0.7.7: the Σ segment follows the persisted total scope (today is the
+      // silent default; rolling windows carry a range tag so the number can't
+      // be misread as "today"). v0.7.12: segment order is now enforced in
+      // both scope branches — Σ always precedes hit (the session branch
+      // used to push hit·s first, drifting from the documented order).
+      const totalScope = totalScopeEnabled()
+      const scopeStats = totalFor(totalScope)
+      if (footerSigmaEnabled() && scopeStats) {
+        const scopeTokens = scopeStats?.tokens
+        const scopeTotal =
+          (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
+        if (scopeTotal > 0) {
+          parts.push(`Σ ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`)
+        }
+      }
       const hitScope = hitScopeEnabled()
       const showHitInFooter = footerHitEnabled()
       if (showHitInFooter && hitScope === "session") {
@@ -100,19 +115,6 @@ export function createFooterStatus(deps: {
           // integer percent looks frozen while the underlying counts move.
           if (denominator > 0) parts.push(`hit·s ${((cacheRead / denominator) * 100).toFixed(1)}%`)
         } catch {}
-      }
-      // v0.7.7: the Σ segment follows the persisted total scope (today is the
-      // silent default; rolling windows carry a range tag so the number can't
-      // be misread as "today"). Segment order is unchanged: Σ before hit.
-      const totalScope = totalScopeEnabled()
-      const scopeStats = totalFor(totalScope)
-      if (footerSigmaEnabled() && scopeStats) {
-        const scopeTokens = scopeStats?.tokens
-        const scopeTotal =
-          (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
-        if (scopeTotal > 0) {
-          parts.push(`Σ ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`)
-        }
       }
       const stats = todayStats()
       if (stats) {

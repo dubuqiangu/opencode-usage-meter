@@ -57,8 +57,16 @@ export function createSettings(context: any): SettingsApi {
       })
       settingsStore = s ?? {}
       updateSettingsStore = u
+    } else {
+      // v0.7.12: a missing storage.store used to be a fully silent no-op —
+      // every toggle then "succeeded" without persisting anything. Log it
+      // once so the host incompatibility is visible in the dev log.
+      console.error("[usage-meter] storage.store unavailable — settings will not persist")
     }
-  } catch {}
+  } catch (error) {
+    // v0.7.12: same visibility rule for a store creation that throws.
+    console.error("[usage-meter] settings store creation failed:", error)
+  }
 
   // Normalized settings readers: persisted stores from older versions lack
   // the newer keys, so each reader applies the documented default itself.
@@ -76,18 +84,29 @@ export function createSettings(context: any): SettingsApi {
   // v0.7.9: true = the Stats header is collapsed (metrics lines hidden);
   // absent key reads as expanded.
   const statsBlockCollapsed = (): boolean => settingsStore?.statsBlockCollapsed === true
+  // v0.7.12: an absent update path is an explicit dead end now — log it
+  // instead of silently doing nothing (the caller's UI would otherwise
+  // believe the toggle worked).
   const toggleSettingsFlag = (flagKey: string, currentValue: boolean): void => {
+    if (!updateSettingsStore) {
+      console.error(`[usage-meter] settings store unavailable — cannot toggle ${flagKey}`)
+      return
+    }
     try {
-      void updateSettingsStore?.((draft: any) => {
+      void updateSettingsStore((draft: any) => {
         draft[flagKey] = !currentValue
       })
     } catch {}
   }
 
   const toggleHitScope = (): void => {
+    if (!updateSettingsStore) {
+      console.error("[usage-meter] settings store unavailable — cannot switch hit scope")
+      return
+    }
     try {
       const nextHitScope = hitScopeEnabled() === "session" ? "today" : "session"
-      void updateSettingsStore?.((draft: any) => {
+      void updateSettingsStore((draft: any) => {
         draft.hitScope = nextHitScope
       })
     } catch {}
@@ -95,10 +114,14 @@ export function createSettings(context: any): SettingsApi {
 
   // v0.7.7: cycle the Σ/📊 total dimension today -> 24h -> 7d -> 30d -> today.
   const cycleTotalScope = (): void => {
+    if (!updateSettingsStore) {
+      console.error("[usage-meter] settings store unavailable — cannot cycle total scope")
+      return
+    }
     try {
       const currentIndex = TOTAL_SCOPES.indexOf(totalScopeEnabled())
       const nextTotalScope = TOTAL_SCOPES[(currentIndex + 1) % TOTAL_SCOPES.length]
-      void updateSettingsStore?.((draft: any) => {
+      void updateSettingsStore((draft: any) => {
         draft.totalScope = nextTotalScope
       })
     } catch {}

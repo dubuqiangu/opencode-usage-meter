@@ -9,7 +9,7 @@
 // and cleanup in the original order):
 //   format.ts          — pure formatting / token-estimation helpers
 //   rate-model.ts      — rate math types + pure functions + event accessors
-//   calibration.ts    — live/persisted per-model rate calibration
+//   calibration.ts     — live/persisted per-model rate calibration
 //   settings.ts        — durable settings store + readers / toggles
 //   stats-source.ts    — daily-usage stats fetch / refresh / midnight rollover
 //   session-metrics.ts — per-session runtime state + event handlers
@@ -64,7 +64,14 @@ export default Plugin.define({
       now,
     })
     const statsPanel = createStatsPanel({ context, panelContent })
-    const settingsDialog = createSettingsDialog({ context, settings })
+    // v0.7.12: the dialog's `s` key triggers an immediate totals fetch after
+    // cycling the scope — the rolling-window aggregate needs it before the
+    // 60s tick would get around to it.
+    const settingsDialog = createSettingsDialog({
+      context,
+      settings,
+      fetchTotals: statsSource.fetchTotals,
+    })
     const sidebarMetrics = createSidebarMetrics({
       context,
       sessionMetrics,
@@ -122,8 +129,19 @@ export default Plugin.define({
     try {
       unregisterPanel = context.ui.slot({
         append: "session.panel",
-        render: (panel: any) =>
-          panel?.name === PANEL_NAME ? <StatsPanel panel={panel} /> : null,
+        // v0.7.12: same reactive wrap as the sidebar/footer slots — the
+        // host does not track a directly returned element, so the panel
+        // body (header clock, detail tables) used to freeze at its first
+        // paint. The non-matching render path also releases the panel's
+        // "f" fullscreen keymap layer (see createStatsPanel).
+        render: (panel: any) => {
+          if (panel?.name !== PANEL_NAME) statsPanel.disposeFullscreenLayer()
+          return (
+            <box width="100%" flexDirection="column">
+              {() => (panel?.name === PANEL_NAME ? <StatsPanel panel={panel} /> : null)}
+            </box>
+          )
+        },
       })
     } catch (error) {
       console.error("[usage-meter] session.panel slot failed:", error)
@@ -191,7 +209,14 @@ export default Plugin.define({
                         context.ui.dialog.set({ size: "large", centered: true })
                       } catch {}
                       try {
-                        context.ui.dialog.show(() => <SettingsBody />, () => {})
+                        // v0.7.12: the previously empty onClose leaked the
+                        // dialog's d/s/f/h/b keymap layer — release it when
+                        // the dialog closes (idempotent, see
+                        // createSettingsDialog).
+                        context.ui.dialog.show(
+                          () => <SettingsBody />,
+                          () => settingsDialog.disposeKeymapLayer(),
+                        )
                       } catch (error) {
                         console.error("[usage-meter] settings dialog failed:", error)
                       }
@@ -205,13 +230,17 @@ export default Plugin.define({
                     group: "usage-meter",
                     palette: true,
                     run: () => {
+                      // v0.7.12: compute the next scope up front — reading
+                      // the store after the toggle raced the async write
+                      // and flipped the toast direction on some hosts.
+                      const nextHitScope =
+                        settings.hitScopeEnabled() === "session" ? "today" : "session"
                       settings.toggleHitScope()
                       try {
-                        const next = settings.settingsStore?.hitScope
                         ;(context.ui as any)?.toast?.show?.({
                           title: "usage-meter",
                           message:
-                            next === "session"
+                            nextHitScope === "session"
                               ? "hit 维度:当前会话(hit·s,严格口径)"
                               : "hit 维度:今日汇总(hit,全 session)",
                         })
@@ -254,16 +283,35 @@ export default Plugin.define({
     // v0.7.7: covers the active rolling scope as well.
     const statsInterval = setInterval(() => statsSource.fetchTotals(), 60_000)
 
-    const unregister = context.ui.slot({
-      append: "prompt.footer.status",
-      render: (slotProps: any) => <FooterStatus slotProps={slotProps} />,
-    })
+    // v0.7.12: the footer slot is registered like every other slot now —
+    // a bare call used to be the one unprotected registration (and its
+    // unregister the one unprotected teardown). The render is function-child
+    // wrapped so the body falls into an owned render effect; a host-driven
+    // re-mount then disposes the old memo instead of stacking untracked
+    // ones on every footer re-render.
+    let unregisterFooterSlot: any
+    try {
+      unregisterFooterSlot = context.ui.slot({
+        append: "prompt.footer.status",
+        render: (slotProps: any) => (
+          <box width="100%" flexDirection="column">
+            {() => <FooterStatus slotProps={slotProps} />}
+          </box>
+        ),
+      })
+    } catch (error) {
+      console.error("[usage-meter] prompt.footer.status slot failed:", error)
+    }
 
     return () => {
       clearInterval(timer)
       clearInterval(statsInterval)
       statsSource.release()
-      if (typeof unregister === "function") unregister()
+      if (typeof unregisterFooterSlot === "function") {
+        try {
+          unregisterFooterSlot()
+        } catch {}
+      }
       if (typeof unregisterSidebarSlot === "function") {
         try {
           unregisterSidebarSlot()
@@ -288,11 +336,20 @@ export default Plugin.define({
           layerDispose.dispose()
         } catch {}
       }
+      // v0.7.12: release the dialog / panel keymap layers in case they are
+      // still up at teardown (both are idempotent no-ops when already
+      // disposed).
+      statsPanel.disposeFullscreenLayer()
+      settingsDialog.disposeKeymapLayer()
       subs.forEach((stop) => {
         try {
           stop()
         } catch {}
       })
+      // v0.7.12: cancels pending 1.5s delayed rate recomputes (they
+      // previously kept firing after teardown); aligned with the other
+      // factory releases.
+      sessionMetrics.release()
       calibration.release()
       settings.release()
     }

@@ -174,7 +174,10 @@ test("backfillLastTurn restores the idle readout for sessions opened after a TUI
     },
   ])
   metrics.backfillLastTurn("ses_backfill")
-  assert.equal(metrics.lastDurations.get("ses_backfill"), 3_000)
+  // 0.7.12: the turn spans first assistant created -> last completed
+  // assistant completed (3_000 - 1_000), excluding the 1s queue wait
+  // after the user message — same basis as the live settle.
+  assert.equal(metrics.lastDurations.get("ses_backfill"), 2_000)
   assert.equal(metrics.lastExactRates.get("ses_backfill"), 50)
 })
 
@@ -242,4 +245,112 @@ test("backfillLastTurn is a safe no-op for sessions without parseable records", 
   metrics.backfillLastTurn("ses_empty")
   assert.equal(metrics.lastDurations.has("ses_empty"), false)
   assert.doesNotThrow(() => metrics.backfillLastTurn("ses_empty"))
+})
+
+test("backfillLastTurn measures the turn from the first assistant message, excluding queue wait (0.7.12)", () => {
+  // Same basis as the live settle: the turn spans the FIRST assistant
+  // message's created -> the LAST completed assistant's completed. The
+  // queue wait between the user message and generation starting must not
+  // inflate the backfilled 🏁 span.
+  const userCreated = Date.now() - 60_000
+  const { metrics } = createMetricsHarness([
+    {
+      type: "user",
+      time: { created: userCreated, completed: userCreated + 100 },
+      tokens: {},
+    },
+    {
+      type: "assistant",
+      time: { created: userCreated + 5_000, completed: userCreated + 7_000 },
+      tokens: { output: 60, reasoning: 0 },
+    },
+    {
+      type: "assistant",
+      time: { created: userCreated + 7_500, completed: userCreated + 9_000 },
+      tokens: { output: 40, reasoning: 0 },
+    },
+  ])
+  metrics.backfillLastTurn("ses_queue_wait")
+  // 9_000 - 5_000 = 4s, not 9_000 - 0: the 5s queue wait is excluded.
+  assert.equal(metrics.lastDurations.get("ses_queue_wait"), 4_000)
+  // The exact rate keeps its own per-message created->completed basis:
+  // 100 tokens over (2s + 1.5s) = ~28.6 -> 29 tok/s.
+  assert.equal(metrics.lastExactRates.get("ses_queue_wait"), 29)
+})
+
+test("backfillLastTurn negative-caches structurally unusable records, not transient ones (0.7.12)", () => {
+  // The footer slot re-mounts on nearly every host activity; only a
+  // session whose list is structurally unusable for replay (content but
+  // no user anchor) must stop rescanning. Empty lists and mid-run
+  // sessions stay retryable (see the handover test below).
+  let listCallCount = 0
+  const calibration = createCalibrationStub()
+  const metrics: SessionMetricsApi = createSessionMetrics({
+    context: {
+      data: {
+        session: {
+          message: {
+            list: () => {
+              listCallCount += 1
+              return [{ type: "assistant", time: { created: Date.now() - 60_000 }, tokens: {} }]
+            },
+          },
+        },
+      },
+    },
+    calibration: calibration.stub,
+    scheduleStatsRefresh: () => {},
+  })
+  metrics.backfillLastTurn("ses_unusable_records")
+  metrics.backfillLastTurn("ses_unusable_records")
+  metrics.backfillLastTurn("ses_unusable_records")
+  assert.equal(listCallCount, 1)
+  assert.equal(metrics.lastDurations.has("ses_unusable_records"), false)
+  assert.equal(metrics.lastExactRates.has("ses_unusable_records"), false)
+})
+
+test("backfillLastTurn keeps retrying mid-run sessions until the turn completes (0.7.5 handover, 0.7.12)", () => {
+  // A session running in another window: the user message exists but the
+  // assistant reply is not completed yet. Every mount rescans (in-memory
+  // list, cheap); once the turn completes elsewhere the idle readout
+  // appears on the next mount — the 0.7.5 handover scenario, which a
+  // cache-everything negative cache would have permanently broken.
+  let turnCompleted = false
+  let listCallCount = 0
+  const calibration = createCalibrationStub()
+  const metrics: SessionMetricsApi = createSessionMetrics({
+    context: {
+      data: {
+        session: {
+          message: {
+            list: () => {
+              listCallCount += 1
+              return turnCompleted
+                ? [
+                    { type: "user", time: { created: 10_000 }, tokens: {} },
+                    {
+                      type: "assistant",
+                      time: { created: 11_000, completed: 12_000 },
+                      tokens: { output: 100 },
+                    },
+                  ]
+                : [{ type: "user", time: { created: 10_000 }, tokens: {} }]
+            },
+          },
+        },
+      },
+    },
+    calibration: calibration.stub,
+    scheduleStatsRefresh: () => {},
+  })
+  metrics.backfillLastTurn("ses_running_elsewhere")
+  metrics.backfillLastTurn("ses_running_elsewhere")
+  assert.equal(listCallCount, 2) // transient — rescanned, not cached
+  assert.equal(metrics.lastDurations.has("ses_running_elsewhere"), false)
+  turnCompleted = true
+  metrics.backfillLastTurn("ses_running_elsewhere")
+  assert.equal(metrics.lastDurations.get("ses_running_elsewhere"), 1_000)
+  // The successful path scans once more here and once more inside
+  // exactRateFromRecords' record aggregation: 2 failed + 2 = 4.
+  assert.equal(listCallCount, 4)
 })

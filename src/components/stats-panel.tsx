@@ -10,6 +10,7 @@ export type StatsPanelApi = {
   StatsBody: (props: { sessionID?: string }) => any
   StatsPanel: (props: { panel: any }) => any
   runTokensCommand: () => Promise<void>
+  disposeFullscreenLayer: () => void
 }
 
 export function createStatsPanel(deps: { context: any; panelContent: PanelContentApi }): StatsPanelApi {
@@ -35,7 +36,11 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
       return out
     })
     const base = (context.theme as any)?.text?.base
-    return <text fg={base}>{lines().join("\n")}</text>
+    // v0.7.12: function child — the panel slot render is wrapped the same
+    // way (tui.tsx), and this interpolation must stay lazy too so the memo
+    // re-render actually reaches the renderable tree; eagerly joined text
+    // froze the panel at its first paint.
+    return <text fg={base}>{() => lines().join("\n")}</text>
   }
 
   // /usage-full toggles the sidebar panel: open when closed, collapse when open.
@@ -55,7 +60,11 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
     } catch {
       opened = false
     }
-    if (opened === false) {
+    // v0.7.12: `opened !== true` — a missing panel API used to return
+    // undefined here, which slipped through the old `=== false` check as
+    // "success" and silently killed the command on hosts without a sidebar
+    // panel. Only an explicit true skips the fallback.
+    if (opened !== true) {
       // Dialog fallback (no sidebar): still pass the current sessionID so
       // the live window/session/subagent blocks render when inside a session.
       const route: any = context.ui?.router?.current?.()
@@ -67,32 +76,63 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
         context.ui.dialog.set({ size: "large", centered: true })
       } catch {}
       setDetail(undefined)
-      context.ui.dialog.show(() => <StatsBody sessionID={sid} />, () => {})
+      try {
+        context.ui.dialog.show(() => <StatsBody sessionID={sid} />, () => {})
+      } catch (error) {
+        console.error("[usage-meter] stats dialog fallback failed:", error)
+      }
+    } else {
+      // v0.7.12: clear the stale detail from a previous open so the panel
+      // shows the loading state instead of the old tables until refetch.
+      setDetail(undefined)
     }
     void ensureDetail()
   }
 
   // Sidebar panel contribution: the host owns sizing/focus/close (collapse
   // via escape or toggling /usage-full; "f" toggles fullscreen while focused).
+  // v0.7.12: the "f" fullscreen layer's dispose used to be dropped, so every
+  // panel mount stacked another layer for the rest of the session. The
+  // layer is created once per panel presence (guarded) and released when
+  // the panel slot stops naming our panel (tui.tsx render path) or at
+  // plugin teardown via disposeFullscreenLayer.
+  let fullscreenLayerDispose: any
   const StatsPanel = (props: { panel: any }) => {
-    try {
-      ;(context.keymap as any)?.layer?.(() => ({
-        commands: [
-          {
-            id: "usage-meter.stats.fullscreen",
-            title: "统计面板全屏",
-            bind: "f",
-            run: () => {
-              try {
-                props.panel?.toggleFullscreen?.()
-              } catch {}
+    if (fullscreenLayerDispose === undefined) {
+      try {
+        fullscreenLayerDispose = (context.keymap as any)?.layer?.(() => ({
+          commands: [
+            {
+              id: "usage-meter.stats.fullscreen",
+              title: "统计面板全屏",
+              bind: "f",
+              run: () => {
+                try {
+                  props.panel?.toggleFullscreen?.()
+                } catch {}
+              },
             },
-          },
-        ],
-      }))
-    } catch {}
+          ],
+        }))
+      } catch {
+        fullscreenLayerDispose = null
+      }
+    }
     return <StatsBody sessionID={props.panel?.sessionID} />
   }
 
-  return { StatsBody, StatsPanel, runTokensCommand }
+  const disposeFullscreenLayer = (): void => {
+    if (typeof fullscreenLayerDispose === "function") {
+      try {
+        fullscreenLayerDispose()
+      } catch {}
+    } else if (fullscreenLayerDispose && typeof fullscreenLayerDispose.dispose === "function") {
+      try {
+        fullscreenLayerDispose.dispose()
+      } catch {}
+    }
+    fullscreenLayerDispose = undefined
+  }
+
+  return { StatsBody, StatsPanel, runTokensCommand, disposeFullscreenLayer }
 }

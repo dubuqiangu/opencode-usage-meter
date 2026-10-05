@@ -16,6 +16,7 @@ export type SessionMetricsApi = {
   onMessageUpdated: (event: any) => void
   finishTurn: (event: any) => void
   backfillLastTurn: (sessionID: string) => void
+  release: () => void
   starts: Map<string, number>
   lastDurations: Map<string, number>
   lastAvgRates: Map<string, number>
@@ -123,17 +124,26 @@ export function createSessionMetrics(deps: {
   // Guards: never overwrite live-tracked values, never touch an active run,
   // and skip when the last user message has no completed reply after it
   // (that session is mid-run elsewhere — showing stale numbers would lie).
-  const backfillPending = new Set<string>()
+  // v0.7.12: negative cache — the footer slot re-mounts on nearly every
+  // host activity (input, cursor blink), and each mount used to re-run a
+  // full message.list scan for sessions that cannot backfill. To bound
+  // that cost without breaking the v0.7.5 handover scenario (take over a
+  // session running elsewhere; 🏁 appears once its turn completes), only
+  // STRUCTURALLY unusable records are cached: a non-empty list with no
+  // user anchor at all. Transient states — an empty (unsynced) list, or a
+  // last turn still queued/generating elsewhere — stay retryable so the
+  // readout recovers on a later mount after the turn completes. Residual
+  // (cheap rescans while unsynced/mid-run) recorded in known-issues.md.
+  const backfillAttemptedSessions = new Set<string>()
   const backfillLastTurn = (sessionID: string): void => {
     if (
       !sessionID ||
       lastDurations.has(sessionID) ||
       starts.has(sessionID) ||
-      backfillPending.has(sessionID)
+      backfillAttemptedSessions.has(sessionID)
     ) {
       return
     }
-    backfillPending.add(sessionID)
     try {
       const messages = context.data?.session?.message?.list?.(sessionID) ?? []
       let lastUserCreated: number | undefined
@@ -154,14 +164,45 @@ export function createSessionMetrics(deps: {
           }
         }
       }
-      if (lastUserCreated === undefined || lastAssistantCompleted === undefined) return
-      if (lastAssistantCompleted <= lastUserCreated) return // last message still running elsewhere
-      lastDurations.set(sessionID, lastAssistantCompleted - lastUserCreated)
+      if (lastUserCreated === undefined) {
+        // No user anchor at all in a non-empty list: structurally unusable
+        // for replay — negative-cache. An EMPTY list is just unsynced and
+        // must stay retryable (records may arrive on a later mount).
+        if (messages.length > 0) backfillAttemptedSessions.add(sessionID)
+        return
+      }
+      if (lastAssistantCompleted === undefined || lastAssistantCompleted <= lastUserCreated) {
+        // The last turn is still queued/generating elsewhere (or the list
+        // is not synced yet) — transient, keep retryable so the v0.7.5
+        // handover scenario (take over a session running elsewhere; 🏁
+        // appears after its turn completes) still recovers.
+        return
+      }
+      // v0.7.12: same basis as the exact-rate settle — the turn spans from
+      // the FIRST assistant message's created to the LAST completed
+      // assistant's completed, excluding the queue wait between the user
+      // sending the message and the run actually generating. (Previously
+      // user-created → completed, which overstated short turns whenever the
+      // model sat in queue.) The 2s tolerance mirrors exactRateFromRecords'
+      // previous-turn filter.
+      let firstAssistantCreated: number | undefined
+      for (const message of messages) {
+        if (message?.type !== "assistant") continue
+        const created = tsOf(message?.time?.created)
+        if (created === undefined || created < lastUserCreated - 2_000) continue
+        if (firstAssistantCreated === undefined || created < firstAssistantCreated) {
+          firstAssistantCreated = created
+        }
+      }
+      // Defensive fallback: no in-window assistant carries a parseable
+      // created timestamp — keep the pre-0.7.12 user→completed span so the
+      // readout still appears instead of silently vanishing.
+      lastDurations.set(
+        sessionID,
+        lastAssistantCompleted - (firstAssistantCreated ?? lastUserCreated),
+      )
       exactRateFromRecords(sessionID, lastUserCreated)
-    } catch {
-    } finally {
-      backfillPending.delete(sessionID)
-    }
+    } catch {}
   }
 
   const onExecutionStarted = (event: any): void => {
@@ -182,6 +223,11 @@ export function createSessionMetrics(deps: {
     }
   }
 
+  // v0.7.12: pending delayed recomputes are tracked so release() can cancel
+  // them — they previously kept firing (and touching host state) after the
+  // plugin instance was torn down by a reload.
+  const delayedRecomputeTimers: ReturnType<typeof setTimeout>[] = []
+
   const finishTurn = (event: any): void => {
     const sessionID = sessionIDOf(event)
     if (!sessionID) return
@@ -197,11 +243,14 @@ export function createSessionMetrics(deps: {
       exactRateFromRecords(sessionID, started)
       // The message record may not be synced yet when execution.succeeded
       // fires; one delayed recompute catches it (idempotent).
-      setTimeout(() => {
+      const delayedRecompute = setTimeout(() => {
+        const timerIndex = delayedRecomputeTimers.indexOf(delayedRecompute)
+        if (timerIndex >= 0) delayedRecomputeTimers.splice(timerIndex, 1)
         try {
           exactRateFromRecords(sessionID, started)
         } catch {}
       }, 1_500)
+      delayedRecomputeTimers.push(delayedRecompute)
     }
     starts.delete(sessionID)
     rates.delete(sessionID)
@@ -276,6 +325,15 @@ export function createSessionMetrics(deps: {
     if (out > 0) adoptExact(st, info.id, out, info.time?.completed !== undefined)
   }
 
+  // v0.7.12: cancels every pending 1.5s delayed recompute — the timers are
+  // the only resource this factory owns; the Maps and the negative cache die
+  // with the plugin instance (no host handles held). tui.tsx calls this in
+  // the plugin cleanup alongside the other factory releases.
+  const release = (): void => {
+    for (const pendingTimer of delayedRecomputeTimers) clearTimeout(pendingTimer)
+    delayedRecomputeTimers.length = 0
+  }
+
   return {
     onExecutionStarted,
     onStepStarted,
@@ -285,6 +343,7 @@ export function createSessionMetrics(deps: {
     onMessageUpdated,
     finishTurn,
     backfillLastTurn,
+    release,
     starts,
     lastDurations,
     lastAvgRates,

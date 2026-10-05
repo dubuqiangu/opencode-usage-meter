@@ -65,9 +65,9 @@ stateDiagram-v2
 内存态清零带来一个体验缺口:重开终端后接手的旧会话,在完成下一轮之前 footer/右栏不显示 `🏁/⚡`。0.7.5 起补上——footer 与右栏渲染时,对本实例内**没有**轮次记录的会话惰性触发 `backfillLastTurn`:
 
 - 数据源:已同步的权威消息记录(`session.message.list`,与 finishTurn 精确结算同源),零新增采集/请求
-- 回放口径:末条 user 消息 `created` → 末条已完成 assistant `completed` 即上轮时长;assistant 消息 `Σ(output+reasoning) ÷ Σ(created→completed)` 即精确速率(同 0.6.5 口径)
+- 回放口径(0.7.12 对齐实时结算):该轮窗口内**首条 assistant 消息 `created` → 末条已完成 assistant `completed`** 即上轮时长(消除"用户发消息→轮次开跑"的排队等待;与精确速率的 created→completed 同基);assistant 消息 `Σ(output+reasoning) ÷ Σ(created→completed)` 即精确速率(同 0.6.5 口径)
 - 三重防护:已有实时记录不覆盖(实时值优先)、`starts` 存在(运行中)不写、末条 user 消息之后无已完成回复(会话在别处运行中)不显示旧值
-- 触发即忘:每次渲染先查守卫(三次 Map/Set 查询),未同步完成前消息列表为空时下一 tick 自动重试
+- 触发即忘:每次挂载先查守卫(Map/Set 查询)。重试并非每 tick——footer/右栏槽位渲染均经函数子节点包裹(0.7.10/0.7.12),组件体随宿主槽位调用/重挂载执行;0.7.12 起**结构性无望**(列表非空但无 user 锚点)的会话记入负缓存不再重扫,瞬态(列表未同步/上轮在别处运行中)保持重扫直至轮次完成——0.7.5 接手场景不受影响,残余限制见 [known-issues.md](../decisions/known-issues.md)
 
 
 ## 交互时序图

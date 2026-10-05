@@ -93,3 +93,26 @@ test("release is a documented no-op for the host-managed store", () => {
   const settings = createSettings({ storage: createMockStorage() })
   assert.doesNotThrow(() => settings.release())
 })
+
+test("toggles log explicitly and stay no-ops when the settings store is unavailable (0.7.12)", () => {
+  const originalConsoleError = console.error
+  const loggedErrors: string[] = []
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(String(args[0]))
+  }
+  try {
+    const settings = createSettings(createStoragelessContext())
+    settings.toggleSettingsFlag("footerSigma", settings.footerSigmaEnabled())
+    settings.toggleHitScope()
+    settings.cycleTotalScope()
+    // Nothing persisted, nothing thrown — but the dead end is visible.
+    assert.equal(settings.footerSigmaEnabled(), false)
+    assert.equal(settings.hitScopeEnabled(), "today")
+    assert.equal(settings.totalScopeEnabled(), "today")
+    // One store-unavailable log at creation + one guard log per toggle.
+    assert.equal(loggedErrors.length, 4)
+    assert.ok(loggedErrors.every((entry) => entry.startsWith("[usage-meter]")))
+  } finally {
+    console.error = originalConsoleError
+  }
+})
