@@ -66,11 +66,14 @@ export default Plugin.define({
     const statsPanel = createStatsPanel({ context, panelContent })
     // v0.7.12: the dialog's `s` key triggers an immediate totals fetch after
     // cycling the scope — the rolling-window aggregate needs it before the
-    // 60s tick would get around to it.
+    // 60s tick would get around to it. v0.7.13: the dialog also gets the
+    // now signal — its memo reads now() unconditionally so the body stays
+    // live even on hosts whose settings store is not reactive.
     const settingsDialog = createSettingsDialog({
       context,
       settings,
       fetchTotals: statsSource.fetchTotals,
+      now,
     })
     const sidebarMetrics = createSidebarMetrics({
       context,
@@ -289,12 +292,16 @@ export default Plugin.define({
     // wrapped so the body falls into an owned render effect; a host-driven
     // re-mount then disposes the old memo instead of stacking untracked
     // ones on every footer re-render.
+    // v0.7.13: the wrapper carries no layout props — the footer is a
+    // horizontal context and a width="100%"/column box would impose the
+    // sidebar's vertical shape on it; only the function child (the
+    // owned-effect goal) matters here.
     let unregisterFooterSlot: any
     try {
       unregisterFooterSlot = context.ui.slot({
         append: "prompt.footer.status",
         render: (slotProps: any) => (
-          <box width="100%" flexDirection="column">
+          <box>
             {() => <FooterStatus slotProps={slotProps} />}
           </box>
         ),

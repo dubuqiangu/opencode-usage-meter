@@ -30,7 +30,7 @@
 
 | 工具 | 用途 |
 |---|---|
-| `npm test` | 55 例断言用例(node:test 汇总计数 56,`test-loader.mjs` 解析钩子文件本身计 1 条),零依赖(Node ≥22 原生 type stripping) |
+| `npm test` | 57 例断言用例(node:test 汇总计数 58,`test-loader.mjs` 解析钩子文件本身计 1 条),零依赖(Node ≥22 原生 type stripping) |
 | `pwsh scripts/verify-install.ps1` | 一键安装自验证(发布闭环固定最后一步,见 [AGENTS.md](../../AGENTS.md)) |
 
 ## 计时/速率显示判定(footer 与右栏同款逻辑)

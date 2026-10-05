@@ -123,6 +123,39 @@ test("fetchTotals refreshes today plus the active rolling scope", async () => {
   assert.equal(statsSource.totalFor("30d")?.tokens.output, 2)
 })
 
+test("fetchTotals honors an explicit scope override instead of reading the store back (0.7.13)", async () => {
+  // The dialog's `s` handler fetches the UPCOMING scope right after the
+  // (asynchronous) store write — reading the store back could still yield
+  // the OLD scope, so the override must win.
+  const windowLengths: number[] = []
+  const statsSource = createStatsSource(
+    {
+      client: {
+        session: {
+          stats: async (input: Record<string, unknown>) => {
+            windowLengths.push((input.to as number) - (input.from as number))
+            return { data: { tokens: { input: 1, output: 2, reasoning: 0 } } }
+          },
+        },
+      },
+    },
+    () => "today", // store reader keeps returning the OLD scope
+  )
+  statsSource.fetchTotals("7d")
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.ok(windowLengths.some((windowMs) => Math.abs(windowMs - 7 * 86_400_000) < 5_000))
+  assert.equal(statsSource.totalFor("7d")?.tokens.output, 2)
+  // Without an override the store reader is consulted again: "today" adds
+  // no rolling-window call beyond the one the override already issued.
+  const rollingCallsBefore = windowLengths.filter((windowMs) => windowMs > 24 * 3_600_000).length
+  statsSource.fetchTotals()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const rollingCallsAfter = windowLengths.filter((windowMs) => windowMs > 24 * 3_600_000).length
+  assert.equal(rollingCallsAfter, rollingCallsBefore)
+})
+
 test("the step-refresh debounce survives a pending missing-client retry", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] })
   const originalError = console.error

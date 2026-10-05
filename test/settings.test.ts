@@ -2,7 +2,7 @@
 // for stores persisted by older plugin versions, and the toggle paths.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { createSettings } from "../src/settings.ts"
+import { createSettings, nextTotalScope } from "../src/settings.ts"
 
 type MockStoreState = Record<string, unknown>
 type MockStorage = { store: (name: string, opts: { initial: unknown }) => [MockStoreState, (fn: (draft: MockStoreState) => void) => Promise<void>] }
@@ -115,4 +115,13 @@ test("toggles log explicitly and stay no-ops when the settings store is unavaila
   } finally {
     console.error = originalConsoleError
   }
+})
+
+test("nextTotalScope cycles today -> 24h -> 7d -> 30d -> today as a pure function (0.7.13)", () => {
+  // The settings dialog's `s` handler computes the next scope through this
+  // helper BEFORE the store write — it must never depend on store state.
+  assert.equal(nextTotalScope("today"), "24h")
+  assert.equal(nextTotalScope("24h"), "7d")
+  assert.equal(nextTotalScope("7d"), "30d")
+  assert.equal(nextTotalScope("30d"), "today")
 })

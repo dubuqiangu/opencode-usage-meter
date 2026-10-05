@@ -97,7 +97,13 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
   // the panel slot stops naming our panel (tui.tsx render path) or at
   // plugin teardown via disposeFullscreenLayer.
   let fullscreenLayerDispose: any
+  // v0.7.13: the layer's run closure must not capture the panel object
+  // from the mount that created it — the host hands the slot a fresh
+  // panel object on re-renders, and a stale closure would toggle
+  // fullscreen on a dead one. Every StatsPanel invocation refreshes this.
+  let currentFullscreenPanel: any
   const StatsPanel = (props: { panel: any }) => {
+    currentFullscreenPanel = props.panel
     if (fullscreenLayerDispose === undefined) {
       try {
         fullscreenLayerDispose = (context.keymap as any)?.layer?.(() => ({
@@ -108,7 +114,7 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
               bind: "f",
               run: () => {
                 try {
-                  props.panel?.toggleFullscreen?.()
+                  currentFullscreenPanel?.toggleFullscreen?.()
                 } catch {}
               },
             },

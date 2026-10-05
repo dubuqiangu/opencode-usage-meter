@@ -16,7 +16,7 @@ export type StatsSourceApi = {
   totalFor: (scope: TotalScope) => any
   fetchToday: () => Promise<void>
   fetchRange: (scope: TotalScope) => Promise<void>
-  fetchTotals: () => void
+  fetchTotals: (scopeOverride?: TotalScope) => void
   scheduleStatsRefresh: (delayMs?: number) => void
   bindPanelRefresh: (refresh: () => void) => void
   checkMidnightRollover: () => void
@@ -44,7 +44,6 @@ export function createStatsSource(
   // scope is fetched; switching scopes triggers one extra read-only query.
   const [rangeStats, setRangeStats] = createSignal<Partial<Record<TotalScope, any>>>({})
   let statsDay = new Date().toDateString()
-  let statsFailed = false // reserved: hard-fail gate (reset at day rollover); missing client method now retries on a timer
   let statsBusy = false
   // v0.7.6: the step-refresh debounce and the missing-client retry are two
   // independent lifecycles — sharing one timer slot made the 30s retry wait
@@ -86,7 +85,7 @@ export function createStatsSource(
   const unwrap = (res: any): any => res?.data ?? res
 
   const fetchToday = async (): Promise<void> => {
-    if (statsBusy || statsFailed) return
+    if (statsBusy) return
     const call = statsCall()
     if (!call) {
       // v0.6.4: the client may simply not be ready when setup runs; retry on
@@ -148,10 +147,14 @@ export function createStatsSource(
     scope === "today" ? todayStats() : rangeStats()?.[scope]
 
   // Refresh everything the UI can show right now: today (always — the hit
-  // metric stays daily) plus the active rolling scope.
-  const fetchTotals = (): void => {
+  // metric stays daily) plus the active rolling scope. v0.7.13: callers
+  // that just flipped the scope pass it as scopeOverride — reading
+  // totalScopeEnabled() back immediately can race the asynchronous store
+  // write and fetch the OLD window (the settings dialog's `s` handler
+  // computes the next scope up front and hands it over).
+  const fetchTotals = (scopeOverride?: TotalScope): void => {
     void fetchToday()
-    const activeScope = totalScopeEnabled()
+    const activeScope = scopeOverride ?? totalScopeEnabled()
     if (activeScope !== "today") void fetchRange(activeScope)
   }
   // The debounced refresh also refreshes an open stats panel; tui.tsx binds
@@ -185,7 +188,6 @@ export function createStatsSource(
     const day = new Date().toDateString()
     if (day !== statsDay) {
       statsDay = day
-      statsFailed = false
       fetchTotals()
     }
   }

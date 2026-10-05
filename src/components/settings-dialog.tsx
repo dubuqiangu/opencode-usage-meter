@@ -1,11 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 // v0.6.7: /usage-settings — extensible settings dialog (currently one
 // item family: the footer hit dimension and footer/sidebar toggles).
-// Reactive reads from the settings store mean the body re-renders the
-// moment a value changes. Split from tui.tsx in v0.7.x — behavior unchanged.
+// v0.7.13: the body stays live through two channels — the settings store
+// itself when the host's store is reactive, plus an unconditional now()
+// read inside the memo (the 500ms tick re-evaluates it on every host
+// repaint request) so the text also refreshes on non-reactive-store hosts,
+// the same fallback the footer/sidebar memos have always had.
+// Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createMemo } from "solid-js"
 import type { SettingsApi, TotalScope } from "../settings"
-import { TOTAL_SCOPE_LABELS } from "../settings"
+import { TOTAL_SCOPE_LABELS, nextTotalScope } from "../settings"
 
 export type SettingsDialogApi = {
   SettingsBody: () => any
@@ -15,9 +19,10 @@ export type SettingsDialogApi = {
 export function createSettingsDialog(deps: {
   context: any
   settings: SettingsApi
-  fetchTotals: () => void
+  fetchTotals: (scopeOverride?: TotalScope) => void
+  now: () => number
 }): SettingsDialogApi {
-  const { context, fetchTotals } = deps
+  const { context, fetchTotals, now } = deps
   const {
     hitScopeEnabled,
     totalScopeEnabled,
@@ -53,13 +58,20 @@ export function createSettingsDialog(deps: {
               title: "用量设置:Σ/📊 总耗维度",
               bind: "s",
               run: () => {
+                // v0.7.13: compute the next scope before the store write —
+                // reading totalScopeEnabled() back immediately would race
+                // the asynchronous write, so the fetch would pull the OLD
+                // window (same reasoning as the hit-scope toast fix).
+                const upcomingScope = nextTotalScope(totalScopeEnabled())
                 cycleTotalScope()
                 // v0.7.12: the rolling-window aggregate needs a fetch the
                 // moment the scope flips — before this, the 60s tick was
                 // the only thing that eventually moved the number. tui.tsx
-                // injects statsSource.fetchTotals here.
+                // injects statsSource.fetchTotals here; v0.7.13 passes the
+                // upcoming scope explicitly so the fetch cannot read a
+                // stale store.
                 try {
-                  fetchTotals()
+                  fetchTotals(upcomingScope)
                 } catch {}
               },
             },
@@ -92,7 +104,13 @@ export function createSettingsDialog(deps: {
     // store but the visible text never moved until the dialog was reopened.
     // The function-child interpolation below keeps the memo tracked, and
     // the 0.7.11 tick repaint makes each change visible on screen.
+    // v0.7.13: now() is read unconditionally first — on hosts whose
+    // storage store is not a reactive proxy the settings reads alone would
+    // never re-run the memo; the tick-driven now() guarantees the store
+    // changes are picked up within 500ms regardless (footer/sidebar
+    // fallback pattern).
     const lines = createMemo(() => {
+      now()
       const onOff = (enabled: boolean): string => (enabled ? "开" : "关")
       const hitScopeLabel =
         hitScopeEnabled() === "session"

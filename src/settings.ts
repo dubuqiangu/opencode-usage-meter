@@ -12,6 +12,16 @@ export const TOTAL_SCOPE_LABELS: Record<TotalScope, string> = {
   "30d": "近30日",
 }
 
+// v0.7.13: pure scope-cycle step, shared by cycleTotalScope below and the
+// settings dialog's `s` handler. The handler must know the NEXT scope
+// before the (asynchronous) store write lands, both to fetch the right
+// rolling window and to avoid racing the store read-back — the same
+// compute-before-toggle reasoning as the hit-scope toast.
+export const nextTotalScope = (current: TotalScope): TotalScope => {
+  const currentIndex = TOTAL_SCOPES.indexOf(current)
+  return TOTAL_SCOPES[(currentIndex + 1) % TOTAL_SCOPES.length]
+}
+
 export type SettingsApi = {
   settingsStore: any
   updateSettings: ((fn: (draft: any) => void) => Promise<void>) | undefined
@@ -119,10 +129,9 @@ export function createSettings(context: any): SettingsApi {
       return
     }
     try {
-      const currentIndex = TOTAL_SCOPES.indexOf(totalScopeEnabled())
-      const nextTotalScope = TOTAL_SCOPES[(currentIndex + 1) % TOTAL_SCOPES.length]
+      const cycledScope = nextTotalScope(totalScopeEnabled())
       void updateSettingsStore((draft: any) => {
-        draft.totalScope = nextTotalScope
+        draft.totalScope = cycledScope
       })
     } catch {}
   }

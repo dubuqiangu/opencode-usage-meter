@@ -7,6 +7,14 @@ import { dataOf, msgTotal, pushSample, sessionIDOf, tsOf, turnTotal } from "./ra
 import type { RateState } from "./rate-model"
 import type { CalibrationApi } from "./calibration"
 
+// v0.7.13: how long a structurally-unusable backfill verdict suppresses
+// rescans for that session. Windowed (not permanent): a long session can
+// have its early user messages truncated out of the TUI's message window,
+// and records can also re-sync late — either way a "no user anchor"
+// verdict can go stale, so one rescan is let through after the interval
+// (self-healing) before the verdict is re-established.
+const BACKFILL_RETRY_INTERVAL_MS = 60_000
+
 export type SessionMetricsApi = {
   onExecutionStarted: (event: any) => void
   onStepStarted: (event: any) => void
@@ -134,14 +142,18 @@ export function createSessionMetrics(deps: {
   // last turn still queued/generating elsewhere — stay retryable so the
   // readout recovers on a later mount after the turn completes. Residual
   // (cheap rescans while unsynced/mid-run) recorded in known-issues.md.
-  const backfillAttemptedSessions = new Set<string>()
+  // v0.7.13: the cache is windowed, not permanent — an attempt timestamp
+  // per session instead of an eternal Set. Even a "no user anchor"
+  // verdict can be poisoned by window truncation or slow sync on very
+  // long sessions, so after BACKFILL_RETRY_INTERVAL_MS one rescan is
+  // let through (self-healing) before the verdict re-arms.
+  const backfillLastAttemptAt = new Map<string, number>()
   const backfillLastTurn = (sessionID: string): void => {
-    if (
-      !sessionID ||
-      lastDurations.has(sessionID) ||
-      starts.has(sessionID) ||
-      backfillAttemptedSessions.has(sessionID)
-    ) {
+    if (!sessionID || lastDurations.has(sessionID) || starts.has(sessionID)) {
+      return
+    }
+    const lastAttemptAt = backfillLastAttemptAt.get(sessionID)
+    if (lastAttemptAt !== undefined && Date.now() - lastAttemptAt < BACKFILL_RETRY_INTERVAL_MS) {
       return
     }
     try {
@@ -166,9 +178,10 @@ export function createSessionMetrics(deps: {
       }
       if (lastUserCreated === undefined) {
         // No user anchor at all in a non-empty list: structurally unusable
-        // for replay — negative-cache. An EMPTY list is just unsynced and
-        // must stay retryable (records may arrive on a later mount).
-        if (messages.length > 0) backfillAttemptedSessions.add(sessionID)
+        // for replay — remember the attempt; rescans are suppressed for
+        // BACKFILL_RETRY_INTERVAL_MS only. An EMPTY list is just unsynced
+        // and must stay retryable (records may arrive on a later mount).
+        if (messages.length > 0) backfillLastAttemptAt.set(sessionID, Date.now())
         return
       }
       if (lastAssistantCompleted === undefined || lastAssistantCompleted <= lastUserCreated) {

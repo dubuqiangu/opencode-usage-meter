@@ -172,7 +172,15 @@ export function createSidebarMetrics(deps: {
           flexDirection="row"
           width="100%"
           onMouseUp={() => {
-            const wasCollapsed = isCollapsed()
+            // v0.7.13: reconcile with the same rule the memo uses — the
+            // DISPLAYED state may have been taken over by the persisted
+            // value (another instance flipped it, or the 2s local window
+            // expired), so the click must flip what the user sees, not the
+            // possibly stale local signal; otherwise a click after a
+            // cross-instance takeover would write the store value back
+            // unchanged and the header would appear dead.
+            const wasCollapsed =
+              Date.now() - lastLocalFlipAt < 2_000 ? isCollapsed() : statsBlockCollapsed()
             setIsCollapsed(!wasCollapsed)
             // Open the 2s window where the local flip shadows the persisted
             // value (the store write below may land asynchronously).
