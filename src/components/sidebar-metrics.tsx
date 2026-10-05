@@ -134,9 +134,21 @@ export function createSidebarMetrics(deps: {
         const scopeStats = totalFor(totalScope)
         if (scopeStats) {
           const scopeTokens = scopeStats?.tokens
-          const total =
+          const freshTokensTotal =
             (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
-          if (total > 0) metricLines.push(`📊 ${fmtNum(total)} (${totalScope})`)
+          // v0.7.15: dual reading — same scope, cache-inclusive grand total
+          // (in+out+reasoning+cache R/W) shown after the fresh-compute Σ/📊
+          // metric, so "total tokens" answers that sum cache.read can be
+          // reconciled at a glance. Omitted when there is no cache volume.
+          const cacheInclusiveTotal =
+            freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0)
+          if (freshTokensTotal > 0) {
+            metricLines.push(
+              cacheInclusiveTotal > freshTokensTotal
+                ? `📊 ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})`
+                : `📊 ${fmtNum(freshTokensTotal)} (${totalScope})`,
+            )
+          }
         }
         if (hitScope === "session") {
           try {
