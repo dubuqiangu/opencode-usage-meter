@@ -29,7 +29,7 @@
 
 所有行文本在 `createMemo` 内计算,由 JSX 读取。0.7.8 把动态读取挪进 memo 的方向正确,但漏了最后一环:**宿主 `ui.slot` 的 render 返回元素后不建立任何跟踪 effect**——esbuild `--jsx=automatic` 下插值在组件调用时一次性求值,signal(500ms tick、stats、设置)变了也无人重绘。真机实证:同一会话空闲时右栏 ⏱ 不走秒(0.7.8 只在有活动时被宿主事件驱动的重挂掩盖)。
 
-0.7.10 修正:槽位渲染层用**函数子节点**包裹(`<box width="100%" flexDirection="column">{() => <SidebarMetrics/>}</box>`)。@opentui/solid 的 reconciler 对函数子节点建 `createRenderEffect`(0.4.5/0.5.14 两版源码均确认,`insertExpression` 的 `t === "function"` 分支),组件体内读到的 memo/`now()` signal 从此全程被跟踪,signal 一变即重绘。与 OMO-Slim 的 `reactiveElement`(`insert(root, renderFn)`)同款模式。footer 段同步修复(`<text>{() => statusText()}</text>`),空闲 ⏱ 不再依赖宿主输入驱动的重绘。
+0.7.10 修正:槽位渲染层用**函数子节点**包裹(`<box width="100%" flexDirection="column">{() => <SidebarMetrics/>}</box>`)。@opentui/solid 的 reconciler 对函数子节点建 `createRenderEffect`(0.4.5/0.5.14 两版源码均确认,`insertExpression` 的 `t === "function"` 分支)——但该 effect 只覆盖**槽位边界**;`createComponent` 对组件体 `untrack`,组件体内**插值**读取的 memo/signal 不注册任何跟踪,树仍会冻结(0.7.16 真机证实,见下)。与 OMO-Slim 的 `reactiveElement`(`insert(root, renderFn)`)同款模式。footer 段同步修复(`<text>{() => statusText()}</text>`——叶子级函数子节点,一直是对的),空闲 ⏱ 不再依赖宿主输入驱动的重绘。
 
 0.7.11 补最后一环:**宿主 TUI 按需绘制**。signal → 跟踪 effect → renderable 树更新,都不触发屏幕刷新;屏幕只在有人调 `renderer.requestRender()` 时重绘(OMO-Slim 每次 `setSnapshot` 后都显式请求,这是它"实时"的直接原因)。0.7.10 真机表现"点击生效但要切 session 才可见"正是此因:树早已翻转,画面等宿主自身重绘。修复:tui.tsx 的 500ms tick 每次显式 `context.renderer?.requestRender?.()`——空闲 ⏱ 走秒、60s 统计拉取与任何设置变更 ≤500ms 内可见。
 
@@ -44,5 +44,7 @@
 实现:全宽头部行 box 挂 JSX `onMouseUp`(经无头实证与 OMO-Slim 的 setProp 命令式挂法等价:插件安装目录 @opentui 0.5.14 全栈 + `createMockMouse` 模拟点击,JSX prop / ref+setProp / 带背景行三种挂法全部正常触发),头部标签 `selectable={false}`(TextRenderable 继承 TextBufferRenderable、selectable 默认 true,退出文本选区路径保证点击语义干净)。0.7.9 真机"点击无反应"的根因不是鼠标事件,而是上面 0.7.10 的刷新断裂——点击其实已翻转 store,界面从不重绘。另:测试任何新版本必须**完整重启 TUI**,`/reload` 会拆除旧实例接线并留下重复实例(见 guides/install.md)。
 
 0.7.11 即时翻转:点击处理器先翻转**本地 `isCollapsed` signal**(同步驱动 memo → renderable 树即时更新),再持久化写 store(`toggleSettingsFlag`),最后立即 `requestRender()` 请求重绘——不等 500ms tick,点击即刻 ▼↔▸(OMO-Slim 同款交互链:本地信号即时 + 显式重绘请求)。挂载/重挂载时从 store 读取器重新初始化本地信号,重启后保持持久化状态。
+
+0.7.16 补最后一课(真机证伪四轮盲区):上一段的"翻转 signal → memo 同步重算 → 树即时更新"在真机上从未成立——caret 与指标行是**插值**消费点,`createComponent` 对组件体 `untrack` 使树自挂载起冻结(空闲 ⏱ 不走秒与点击须切 session 同根,oracle 逐环诊断定案)。修复:两个消费点改**叶子级函数子节点**(`<text>{() => `${blockState().collapsed ? "▸" : "▼"} Stats`}</text>` 与 `{() => blockState().collapsed ? null : <text>{() => blockState().metricText}</text>}`),三环至此真正闭合——空闲走秒、点击即时切换、跨实例 2s 窗口和解同批生效。教训全文见 guides/tui-plugin-pitfalls.md 3a。
 
 0.7.12 跨实例回读:0.7.11 的本地镜像此前是 memo 的唯一数据源,"镜像持久值"名不副实——另一 TUI 实例翻转的收起态在本实例永不体现。修复:memo 现在回读持久读取器 `statsBlockCollapsed()`,仅在本地点击后 **2s 窗口内**(`lastLocalFlipAt` 时间戳)信任本地 signal(吸收 store 写异步落地、防回跳),其后持久值接管——跨实例同步在 ≤500ms tick 内恢复生效。

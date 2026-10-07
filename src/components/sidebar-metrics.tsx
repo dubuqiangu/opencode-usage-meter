@@ -210,9 +210,27 @@ export function createSidebarMetrics(deps: {
               (TextRenderable is selectable by default), so a header click
               can never start a selection and the toggle semantics stay
               clean. */}
-          <text fg={base} selectable={false}>{`${blockState().collapsed ? "▸" : "▼"} Stats`}</text>
+          {/* v0.7.16: function-child thunks, NOT eager interpolations.
+              Under esbuild --jsx=automatic a JSX interpolation is evaluated
+              once at component-call time — and createComponent runs the
+              component body inside untrack, so blockState() reads never
+              registered anywhere: the render tree froze at mount, and
+              neither the click flip nor the 500ms tick ever reached the
+              screen (the toggle only surfaced after a session switch
+              re-mounted the slot). Function children ARE tracked:
+              insertExpression builds a render effect around each thunk, so
+              blockState() becomes a live dependency — the caret patches
+              in place and the metrics subtree grows/shrinks on toggle,
+              same pattern as footer-status.tsx. */}
+          <text fg={base} selectable={false}>
+            {() => `${blockState().collapsed ? "▸" : "▼"} Stats`}
+          </text>
         </box>
-        {blockState().collapsed ? null : <text fg={muted}>{blockState().metricText}</text>}
+        {() =>
+          blockState().collapsed ? null : (
+            <text fg={muted}>{() => blockState().metricText}</text>
+          )
+        }
       </box>
     )
   }

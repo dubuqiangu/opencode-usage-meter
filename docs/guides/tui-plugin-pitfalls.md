@@ -59,9 +59,17 @@ context.ui.slot({
 
 **症状**:组件体里预计算的字符串/行数据永远停留在挂载那一刻。
 
-**根因**:Solid 组件函数不是 React——不是每次渲染都重跑。**所有动态读取(now()/会话状态/stats signal/设置)必须放进 `createMemo`,JSX 插值读 memo**。memo 内无条件读一个高频 signal(如 500ms 的 now())还能兜住非响应式数据源(store 直写)的变更。
+**根因**:Solid 组件函数不是 React——不是每次渲染都重跑。**所有动态读取(now()/会话状态/stats signal/设置)必须放进 `createMemo`,且 memo 的每个 JSX 消费点必须是函数子节点(`{() => blockState()}`),不能是插值(`{blockState()}`)**——esbuild `--jsx=automatic` 下插值在组件调用时一次性求值,读到的值从挂载起冻结。memo 内无条件读一个高频 signal(如 500ms 的 now())还能兜住非响应式数据源(store 直写)的变更。
 
-**注意**:这一条(0.7.8 修复)只是必要条件,还必须叠加上面第 1、2 条才构成完整链路:**memo 跟踪(0.7.8)→ 槽位函数子节点(0.7.10)→ requestRender(0.7.11)**,三环缺一不可。footer 的断裂容易被宿主高频重绘(输入/光标闪烁)掩盖——验证响应式请用空闲时的右栏,不要用 footer。
+**注意**:这一条(0.7.8 修复)只是必要条件,还必须叠加上面第 1、2 条才构成完整链路:**memo 跟踪(0.7.8)→ 函数子节点(0.7.10)→ requestRender(0.7.11)**,三环缺一不可。footer 的断裂容易被宿主高频重绘(输入/光标闪烁)掩盖——验证响应式请用空闲时的右栏,不要用 footer。
+
+### 3a. 槽位边界的函数子节点救不了组件体内部(0.7.16 真机证实)
+
+**症状**:右栏 Stats 点击 ▼/▸ 不即时展开/收起,切换 session 才生效;空闲时右栏 ⏱ 也不走秒(footer 正常)。0.7.10-0.7.15 四轮修复全部只过代码审查,真机从未通过。
+
+**根因**:`createComponent` 对组件函数体 `untrack`(solid.js:`return untrack(() => Comp(props))`)——槽位渲染层的函数子节点包裹确实为**它自己**建了 render effect,但该 effect 的全部工作只是调用一次 `<SidebarMetrics/>`;组件体内所有 `blockState()` **插值**读取发生在 untrack 作用域里,既不注册到外层 effect、也不在任何自身 effect 内,树从挂载起冻结,`requestRender` 画的永远是同一棵树。切 session 触发宿主重挂、组件体重跑,才读到新值——症状"要切 session"正源于此。
+
+**正确姿势**:动态叶子一律函数子节点——文本走 `<text>{() => ...}</text>`(insertExpression 对函数子节点建 createRenderEffect,thunk 内的读取在自身 effect 的 Listener 作用域内注册,0.4.5/0.5.14 两版源码均确认),结构分支走 `{() => cond ? null : <text>{() => ...}</text>}`。footer 的 `<text fg={muted}>{() => statusText()}</text>` 一直是对的;0.7.16 把右栏两个插值消费点补成同款后三环才真正闭合。
 
 ---
 
