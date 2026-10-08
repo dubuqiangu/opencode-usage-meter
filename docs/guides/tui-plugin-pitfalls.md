@@ -10,6 +10,8 @@
 
 **根因**:宿主渲染器是**按需绘制**的——solid effect 更新了 renderable 树,但终端画面只在有人调 `renderer.requestRender()` 时才重画。宿主自己的组件更新时它会自己请求;你插件的数据变化没人替你请求。
 
+**修订(0.7.16,doc-only)**:本条"树更新了但屏幕不动"的机制来自 OMO-Slim 源码推断,该形态在真机从未被直接观测过。0.7.16 真机新观测:流式输出期间(宿主自身高频重绘)footer 数值全程停在挂载期快照——高频宿主重绘救不动,说明当前统一症状是**树根本不更新**(插件侧 solid 运行时无效,见 3a 修订与 #13),而非"更新了没人画"。`requestRender` 仍是必要环节、保留;但排查冻结时先验"树是否在更新",再怀疑绘制。
+
 **正确姿势**(OMO-Slim 同款):
 
 ```ts
@@ -65,7 +67,7 @@ context.ui.slot({
 
 ### 3a. 槽位边界的函数子节点救不了组件体内部(0.7.16 真机证实)
 
-**症状**:右栏 Stats 点击 ▼/▸ 不即时展开/收起,切换 session 才生效;空闲时右栏 ⏱ 也不走秒(footer 正常)。0.7.10-0.7.15 四轮修复全部只过代码审查,真机从未通过。
+**症状**:右栏 Stats 点击 ▼/▸ 不即时展开/收起,切换 session 才生效;空闲时右栏 ⏱ 也不走秒。0.7.10-0.7.15 四轮修复全部只过代码审查,真机从未通过。**0.7.16 真机修订**:footer 空闲同样不走秒,且流式输出期间(宿主高频重绘)数值全程停在挂载期快照——此前"footer 正常"是输入/重挂掩盖的假象,footer 从来不是可靠基线(见第 3 条末注)。本条的"插值 vs 函数子节点"结论只覆盖 JSX 消费层;冻结的更上游根因(插件侧 solid 无效,server 构建/实例分裂二选一)见 #13(0.7.17-probe 定案中)。
 
 **根因**:`createComponent` 对组件函数体 `untrack`(solid.js:`return untrack(() => Comp(props))`)——槽位渲染层的函数子节点包裹确实为**它自己**建了 render effect,但该 effect 的全部工作只是调用一次 `<SidebarMetrics/>`;组件体内所有 `blockState()` **插值**读取发生在 untrack 作用域里,既不注册到外层 effect、也不在任何自身 effect 内,树从挂载起冻结,`requestRender` 画的永远是同一棵树。切 session 触发宿主重挂、组件体重跑,才读到新值——症状"要切 session"正源于此。
 
@@ -151,3 +153,11 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 ---
 
 *实证来源:opencode-usage-meter 0.7.8/0.7.10/0.7.11 三轮修复;OMO-Slim 落盘包对照;@opentui/solid 0.4.5/0.5.14 源码;8 个无头探针脚本。相关决策记录见 [../decisions/changelog.md](../decisions/changelog.md)。*
+
+## 13. 插件的裸 solid-js 导入可能拿不到客户端构建/同源实例(0.7.17-probe 定案中)
+
+**症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。
+
+**根因候选(定案前不写死)**:① 裸 `import from "solid-js"` 命中 exports map 的 `node` 条件 → `dist/server.js`(SSR 构建:createSignal 永不通知、createMemo 只算一次、createEffect 是空函数;solid-js 1.9.12 无 bun 条件);② 模块实例分裂的真机版(第 4 条)。@opentui/solid 内部一律 import `solid-js/dist/solid.js`(客户端构建),故 reconciler 是活的,而插件裸导入可能不是。
+
+**正确姿势(待定案)**:TUI 插件的 solid 原语不从裸 `"solid-js"` 取得;发版前在 setup 期打一条实例同一性探针日志(比较 `createSignal === (await import("solid-js/dist/solid.js")).createSignal` 等)。

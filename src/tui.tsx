@@ -25,7 +25,9 @@
 //   session.step.ended / session.step.failed -> exact tokens { tokens: { output, ... } }
 //   message.part.delta / message.updated kept as legacy fallbacks (guarded).
 import { Plugin } from "@opencode/plugin/tui"
-import { createSignal } from "solid-js"
+import { createEffect, createMemo, createRoot, createSignal } from "solid-js"
+import * as opentuiSolid from "@opentui/solid"
+import { probeCount, probeNote } from "./probe"
 import { createCalibration } from "./calibration"
 import { createSettings } from "./settings"
 import { createStatsSource } from "./stats-source"
@@ -42,6 +44,67 @@ export default Plugin.define({
     // Ticking clock drives the elapsed recompute while a run is active, and
     // detects the midnight rollover for the daily usage stats.
     const [now, setNow] = createSignal(Date.now())
+
+    // --- 0.7.17-probe (temporary; remove before the next release) --------
+    // P5: context/renderer shape snapshot (requestRender availability).
+    try {
+      probeNote(
+        "ctx",
+        () =>
+          `ctxKeys=${Object.keys(context).join(",")} ` +
+          `rendererKeys=${context.renderer ? Object.keys(context.renderer).join(",") : "none"} ` +
+          `requestRenderType=${typeof context.renderer?.requestRender} ` +
+          `bun=${(globalThis as any).Bun?.version ?? "n/a"}`,
+      )
+    } catch (error) {
+      probeNote("ctx-err", () => String(error))
+    }
+    // P7a: solid module identity (reference comparison). @opentui/solid's
+    // internals import "solid-js/dist/solid.js" (the client build) and its
+    // `effect` export IS solid's createRenderEffect. If the bare "solid-js"
+    // specifier here resolved to dist/server.js (the exports-map "node"
+    // condition), this plugin's signals never notify and its memos compute
+    // exactly once — the whole tick->now->memo chain is inert.
+    try {
+      const bareCreateSignal = createSignal
+      const bareCreateMemo = createMemo
+      void import("solid-js/dist/solid.js")
+        .then((distSolid: any) => {
+          probeNote(
+            "solid-id",
+            () =>
+              `bareSignalEqDist:${String(bareCreateSignal === distSolid.createSignal)} ` +
+              `bareMemoEqDist:${String(bareCreateMemo === distSolid.createMemo)} ` +
+              `otuiEffectEqDist:${String(
+                (opentuiSolid as any).effect === distSolid.createRenderEffect,
+              )} ` +
+              `distMemoEqOpentuiMemo:${String(
+                typeof (opentuiSolid as any).memo === "function" &&
+                  (opentuiSolid as any).memo === distSolid.createMemo,
+              )}`,
+          )
+        })
+        .catch((error: any) => probeNote("solid-id-err", () => String(error)))
+    } catch (error) {
+      probeNote("solid-id-err", () => String(error))
+    }
+    // P7b: functional probe — is bare-side reactivity alive at all? A
+    // client-build createEffect re-runs on every setNow (one #20 line per
+    // ~10s idle); the server build's createEffect is a no-op, so even #1
+    // never appears. That absence is itself the H1 fingerprint.
+    try {
+      createRoot(() => {
+        let bareEffectRuns = 0
+        createEffect(() => {
+          now()
+          bareEffectRuns += 1
+          if (bareEffectRuns === 1 || bareEffectRuns % 20 === 0)
+            probeNote("bare-effect", () => `#${bareEffectRuns}`)
+        })
+      })
+    } catch (error) {
+      probeNote("bare-effect-err", () => String(error))
+    }
 
     // Module factories. Creation order preserves the original storage-store
     // subscription order (calibration store first, then settings store).
@@ -100,17 +163,34 @@ export default Plugin.define({
     })
 
     const timer = setInterval(() => {
-      setNow(Date.now())
-      statsSource.checkMidnightRollover()
-      // v0.7.11: the host TUI paints on demand — updating the renderable
-      // tree alone never refreshes the screen. Request a repaint on every
-      // tick so the footer ⏱ / sidebar block keep walking while idle, and
-      // any stats or settings change becomes visible within 500ms even
-      // when nothing else drives a host repaint (OMO-Slim requests one
-      // after every snapshot update for the same reason).
+      // 0.7.17-probe: full-body guard — an exception escaping here (e.g. a
+      // now-observer throwing inside setNow's synchronous flush) would
+      // silently skip requestRender and possibly kill the interval. Log it
+      // instead of losing the chain silently.
       try {
-        context.renderer?.requestRender?.()
-      } catch {}
+        setNow(Date.now())
+        statsSource.checkMidnightRollover()
+        // v0.7.11: the host TUI paints on demand — updating the renderable
+        // tree alone never refreshes the screen. Request a repaint on every
+        // tick so the footer ⏱ / sidebar block keep walking while idle, and
+        // any stats or settings change becomes visible within 500ms even
+        // when nothing else drives a host repaint (OMO-Slim requests one
+        // after every snapshot update for the same reason).
+        let requestRenderStatus = "ok"
+        try {
+          if (typeof context.renderer?.requestRender === "function") {
+            context.renderer.requestRender()
+            requestRenderStatus = "called"
+          } else {
+            requestRenderStatus = "missing"
+          }
+        } catch (error) {
+          requestRenderStatus = `threw:${String(error)}`
+        }
+        probeCount("tick", () => `now=${now()} rr=${requestRenderStatus}`)
+      } catch (error) {
+        probeCount("tick-err", () => String(error))
+      }
     }, 500)
 
     const subs: Array<() => void> = []
@@ -161,12 +241,14 @@ export default Plugin.define({
         // child lets the reconciler's insertExpression build a tracked
         // render effect — the same reactiveElement pattern OMO-Slim ships
         // for its sidebar rows.
-        render: (sidebarProps: any) =>
-          sidebarProps?.sessionID ? (
+        render: (sidebarProps: any) => {
+          probeCount("slot-sidebar")
+          return sidebarProps?.sessionID ? (
             <box width="100%" flexDirection="column">
               {() => <SidebarMetrics sessionID={sidebarProps.sessionID} />}
             </box>
-          ) : null,
+          ) : null
+        },
       })
     } catch (error) {
       console.error("[usage-meter] sidebar.content slot failed:", error)
@@ -300,11 +382,14 @@ export default Plugin.define({
     try {
       unregisterFooterSlot = context.ui.slot({
         append: "prompt.footer.status",
-        render: (slotProps: any) => (
-          <box>
-            {() => <FooterStatus slotProps={slotProps} />}
-          </box>
-        ),
+        render: (slotProps: any) => {
+          probeCount("slot-footer")
+          return (
+            <box>
+              {() => <FooterStatus slotProps={slotProps} />}
+            </box>
+          )
+        },
       })
     } catch (error) {
       console.error("[usage-meter] prompt.footer.status slot failed:", error)

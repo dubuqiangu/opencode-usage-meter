@@ -30,6 +30,8 @@
 // requests one immediately, so ▼/▸ toggles instantly instead of waiting
 // for a host-driven repaint (e.g. a session switch).
 import { createMemo, createSignal } from "solid-js"
+import * as opentuiSolid from "@opentui/solid"
+import { probeCount, probeNote } from "../probe"
 import { fmtNum, format } from "../format"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
@@ -86,6 +88,22 @@ export function createSidebarMetrics(deps: {
     // within the next 500ms tick.
     const [isCollapsed, setIsCollapsed] = createSignal(statsBlockCollapsed())
     let lastLocalFlipAt = 0
+
+    // 0.7.17-probe P7c: reconciler-world functional probe. This effect is
+    // created by @opentui/solid's own createRenderEffect — the exact
+    // primitive insertExpression uses for function children — inside the
+    // reconciler's Owner at mount, reading the plugin-side bare-imported
+    // `now` signal. One instance: re-runs every tick (#20 = one line per
+    // ~10s). Split instances (#4) or a server-build bare import: frozen at
+    // #1. This is the on-machine version of the headless #4 test.
+    try {
+      ;(opentuiSolid as any).effect?.(() => {
+        now()
+        probeCount("otui-effect")
+      })
+    } catch (error) {
+      probeNote("otui-effect-err", () => String(error))
+    }
     // v0.7.8/0.7.9: every dynamic read (now(), session status, stats
     // signals, settings signals, collapsed flag) lives inside the memo, so
     // the interpolations below re-render on each 500ms tick, on every stats
@@ -94,6 +112,7 @@ export function createSidebarMetrics(deps: {
     // collapsed<->expanded flip is picked up within 500ms even if the host
     // storage store turns out not to be reactive.
     const blockState = createMemo(() => {
+      probeCount("smemo")
       const currentTime = now()
       // v0.7.12: the persisted reader wins outside the 2s local-flip window
       // (see the comment above the signal); inside it the synchronous local
@@ -184,6 +203,7 @@ export function createSidebarMetrics(deps: {
           flexDirection="row"
           width="100%"
           onMouseUp={() => {
+            probeCount("click")
             // v0.7.13: reconcile with the same rule the memo uses — the
             // DISPLAYED state may have been taken over by the persisted
             // value (another instance flipped it, or the 2s local window
@@ -202,8 +222,15 @@ export function createSidebarMetrics(deps: {
             // the explicit repaint request makes it visible immediately
             // instead of waiting for the next 500ms tick.
             try {
-              context.renderer?.requestRender?.()
-            } catch {}
+              if (typeof context.renderer?.requestRender === "function") {
+                context.renderer.requestRender()
+                probeCount("click-rr", () => "called")
+              } else {
+                probeCount("click-rr", () => "missing")
+              }
+            } catch (error) {
+              probeCount("click-rr", () => `threw:${String(error)}`)
+            }
           }}
         >
           {/* v0.7.10: the label text opts out of text selection
@@ -223,14 +250,18 @@ export function createSidebarMetrics(deps: {
               in place and the metrics subtree grows/shrinks on toggle,
               same pattern as footer-status.tsx. */}
           <text fg={base} selectable={false}>
-            {() => `${blockState().collapsed ? "▸" : "▼"} Stats`}
+            {() => {
+              probeCount("sthunk-caret")
+              return `${blockState().collapsed ? "▸" : "▼"} Stats`
+            }}
           </text>
         </box>
-        {() =>
-          blockState().collapsed ? null : (
+        {() => {
+          probeCount("sthunk-body")
+          return blockState().collapsed ? null : (
             <text fg={muted}>{() => blockState().metricText}</text>
           )
-        }
+        }}
       </box>
     )
   }

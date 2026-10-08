@@ -12,6 +12,7 @@
 // createMemo that the JSX interpolation reads, so the 500ms tick and the
 // stats signals drive the re-render directly.
 import { createMemo } from "solid-js"
+import { probeCount } from "../probe"
 import { fmtNum, format } from "../format"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
@@ -57,6 +58,7 @@ export function createFooterStatus(deps: {
     // always-read `now()` re-evaluates the memo every 500ms and picks up
     // their changes, matching the original "tick-driven" design.
     const statusText = createMemo(() => {
+      probeCount("fmemo")
       const currentTime = now()
       const running = context.data?.session?.status?.(sessionID) === "running"
       const started = starts.get(sessionID)
@@ -136,7 +138,14 @@ export function createFooterStatus(deps: {
     // now() tick re-renders the segment even when the host itself never
     // re-invokes the footer slot render (previously the footer only
     // looked live thanks to the host's frequent input-driven re-renders).
-    return <text fg={muted}>{() => statusText()}</text>
+    return (
+      <text fg={muted}>
+        {() => {
+          probeCount("fthunk")
+          return statusText()
+        }}
+      </text>
+    )
   }
 
   return { FooterStatus }
