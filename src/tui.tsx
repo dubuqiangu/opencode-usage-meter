@@ -92,8 +92,11 @@ export default Plugin.define({
     // client-build createEffect re-runs on every setNow (one #20 line per
     // ~10s idle); the server build's createEffect is a no-op, so even #1
     // never appears. That absence is itself the H1 fingerprint.
+    // P7b root dispose captured for teardown (v0.7.18: the dropped return
+    // value was a bounded leak — the effect lived on after plugin unload).
+    let disposeBareEffectProbe: (() => void) | undefined
     try {
-      createRoot(() => {
+      disposeBareEffectProbe = createRoot(() => {
         let bareEffectRuns = 0
         createEffect(() => {
           now()
@@ -189,7 +192,7 @@ export default Plugin.define({
         }
         probeCount("tick", () => `now=${now()} rr=${requestRenderStatus}`)
       } catch (error) {
-        probeCount("tick-err", () => String(error))
+        probeCount("tick-err", () => (error instanceof Error ? error.stack ?? String(error) : String(error)))
       }
     }, 500)
 
@@ -398,6 +401,13 @@ export default Plugin.define({
     return () => {
       clearInterval(timer)
       clearInterval(statsInterval)
+      // v0.7.18: release the P7b bare-effect probe root alongside the timers
+      // (its dispose was previously dropped — bounded leak).
+      if (typeof disposeBareEffectProbe === "function") {
+        try {
+          disposeBareEffectProbe()
+        } catch {}
+      }
       statsSource.release()
       if (typeof unregisterFooterSlot === "function") {
         try {

@@ -4,6 +4,7 @@
 // keymap, and the /usage-full toggle command with its dialog fallback.
 // Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createMemo } from "solid-js"
+import { PANEL_NAME } from "../panel-content"
 import type { PanelContentApi } from "../panel-content"
 
 export type StatsPanelApi = {
@@ -15,7 +16,7 @@ export type StatsPanelApi = {
 
 export function createStatsPanel(deps: { context: any; panelContent: PanelContentApi }): StatsPanelApi {
   const { context } = deps
-  const { sessionLines, detail, detailLines, ensureDetail, setDetail, PANEL_NAME } = deps.panelContent
+  const { sessionLines, detail, detailLines, ensureDetail, setDetail } = deps.panelContent
 
   // Shared reactive body: live session section (when in a session) + the
   // detail tables. createMemo keeps the panel ticking with the 500ms clock

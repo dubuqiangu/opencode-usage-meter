@@ -35,6 +35,33 @@ const ROLLING_WINDOW_MS: Record<Exclude<TotalScope, "today">, number> = {
   "30d": 30 * 86_400_000,
 }
 
+// v0.7.18: a host SDK call that never settles would lock the busy flag
+// forever (Σ/📊 silently stops refreshing). Race every fetch against this
+// timeout — the loser promise is left to GC (the SDK call takes no
+// AbortSignal), the thrown error lands in the existing catch and the busy
+// flag self-heals in the existing finally.
+const STATS_FETCH_TIMEOUT_MS = 15_000
+
+const withFetchTimeout = async (
+  input: any,
+  call: (input: any) => Promise<any>,
+): Promise<any> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      call(input),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`stats fetch timed out after ${STATS_FETCH_TIMEOUT_MS}ms`)),
+          STATS_FETCH_TIMEOUT_MS,
+        )
+      }),
+    ])
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
+  }
+}
+
 export function createStatsSource(
   context: any,
   totalScopeEnabled: () => TotalScope = () => "today",
@@ -111,7 +138,7 @@ export function createStatsSource(
       // (the query wire format is handled by the client itself).
       const input: any = { from: localMidnight(), to: Date.now() }
       if (timezone) input.timezone = timezone
-      const data = unwrap(await call(input))
+      const data = unwrap(await withFetchTimeout(input, call))
       if (data?.tokens) setTodayStats(data)
     } catch (error) {
       console.error("[usage-meter] session stats fetch failed:", error)
@@ -133,7 +160,7 @@ export function createStatsSource(
     try {
       const input: any = { from: scopeStartMs(scope), to: Date.now() }
       if (timezone) input.timezone = timezone
-      const data = unwrap(await call(input))
+      const data = unwrap(await withFetchTimeout(input, call))
       if (data?.tokens) setRangeStats((previous) => ({ ...previous, [scope]: data }))
     } catch (error) {
       console.error(`[usage-meter] session stats fetch (${scope}) failed:`, error)
