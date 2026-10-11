@@ -155,13 +155,13 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 *实证来源:opencode-usage-meter 0.7.8/0.7.10/0.7.11 三轮修复;OMO-Slim 落盘包对照;@opentui/solid 0.4.5/0.5.14 源码;8 个无头探针脚本。相关决策记录见 [../decisions/changelog.md](../decisions/changelog.md)。*
 
-## 13. 插件的裸 solid-js 导入可能拿不到客户端构建/同源实例(0.7.17-probe 定案中)
+## 13. 插件与 @opentui/solid 必须同 solid-js 实例——裸导入产出"挂载期快照树"(0.7.21 定案)
 
-**症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。
+**症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。屏幕有两种表现、同一条根因链:挂载时数据已就绪 → 显示冻结旧值;挂载时无数据 → 相关段按设计隐藏且永不出现(footer 指标整段不见、右栏 tok/s 消失)。
 
-**根因候选(定案前不写死)**:① 裸 `import from "solid-js"` 命中 exports map 的 `node` 条件 → `dist/server.js`(SSR 构建:createSignal 永不通知、createMemo 只算一次、createEffect 是空函数;solid-js 1.9.12 无 bun 条件);② 模块实例分裂的真机版(第 4 条)。@opentui/solid 内部一律 import `solid-js/dist/solid.js`(客户端构建),故 reconciler 是活的,而插件裸导入可能不是。
+**定案(0.7.20 探针真机两轮,2026-10-11)**:① **H1 证伪**——`bare-effect` 探针从 #1 推进到 #11680,宿主 bun 把裸 `"solid-js"` 解析成了**可用的响应式构建**(非 exports-map node 条件的 SSR 空函数);② **真根因 = 同构建双模块实例**——`solid-id` 探针显示 `bareSignalEqDist:false`(裸导入 ≠ `dist/solid.js` 函数引用)。solid 的响应式全局(observer 栈)是**每模块实例私有**的:@opentui/solid 的 insertExpression 用 `dist/solid.js` 实例建叶子渲染 effect,读插件裸实例的 memo 时,memo 记订阅查的是自己实例的 observer 栈 → **登记不进去**;③ **实证**:组件 memo 重算 12000+ 次(`smemo`),叶子 thunk/宿主 effect 只求值恰等于 slot 重挂数的次数(`sthunk`/`otui-effect` 各 6 次)——memo 活着、通知链断着;`tick` 每拍 `requestRender` 万次,重绘的永远是那棵死的快照树。
 
-**正确姿势(待定案)**:TUI 插件的 solid 原语不从裸 `"solid-js"` 取得;发版前在 setup 期打一条实例同一性探针日志(比较 `createSignal === (await import("solid-js/dist/solid.js")).createSignal` 等)。
+**正确姿势(0.7.21 已实施)**:src/ 全部 solid 原语导入一律走 `"solid-js/dist/solid.js"`(与 @opentui/solid 内部同路径、同实例,订阅握手成立)——createSignal/createMemo/createEffect/createRoot 七处导入行全部统一,禁止裸 `"solid-js"`。配套:宿主 status() 客户端读取在三处 memo/构建路径上加 try 包裹(服务重启后客户端可能抛错,`?.` 防不住方法体抛错;统一实例后一处抛错会毒化整条渲染链)。OMO-Slim 的 sidebar 行长期 live 更新即是同款实证。探针证据链:`~\.local\share\opencode\usage-meter-probe.log` 2026-10-11 两轮干净进程。
 
 ## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
 

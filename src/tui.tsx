@@ -25,7 +25,7 @@
 //   session.step.ended / session.step.failed -> exact tokens { tokens: { output, ... } }
 //   message.part.delta / message.updated kept as legacy fallbacks (guarded).
 import { Plugin } from "@opencode/plugin/tui"
-import { createEffect, createMemo, createRoot, createSignal } from "solid-js"
+import { createEffect, createMemo, createRoot, createSignal } from "solid-js/dist/solid.js"
 import * as opentuiSolid from "@opentui/solid"
 import { probeCount, probeNote } from "./probe"
 import { createCalibration } from "./calibration"

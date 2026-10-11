@@ -29,7 +29,7 @@
 // on every fire, and the header click flips a local collapsed signal and
 // requests one immediately, so ▼/▸ toggles instantly instead of waiting
 // for a host-driven repaint (e.g. a session switch).
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createSignal } from "solid-js/dist/solid.js"
 import * as opentuiSolid from "@opentui/solid"
 import { probeCount, probeNote } from "../probe"
 import { fmtNum, format } from "../format"
@@ -122,7 +122,13 @@ export function createSidebarMetrics(deps: {
       const collapsed = Date.now() - lastLocalFlipAt < 2_000 ? isCollapsed() : persistedCollapsed
       let metricText: string | null = null
       if (!collapsed) {
-        const running = context.data?.session?.status?.(sessionID) === "running"
+        // 0.7.21: wrap the host status() read — see footer-status.tsx; a
+        // throwing client must degrade to "not running", not poison the
+        // unified-instance reactive chain.
+        let running = false
+        try {
+          running = context.data?.session?.status?.(sessionID) === "running"
+        } catch {}
         const started = starts.get(sessionID)
         const last = lastDurations.get(sessionID)
         const metricLines: string[] = []

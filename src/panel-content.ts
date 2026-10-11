@@ -1,7 +1,7 @@
 // Panel content builders for the /usage-full stats view: the live session
 // header, the current-window / cumulative / subagent blocks, and the daily +
 // all-time detail tables. Split from tui.tsx in v0.7.x — behavior unchanged.
-import { createSignal } from "solid-js"
+import { createSignal } from "solid-js/dist/solid.js"
 import { fmtNum, fmtUSD, format } from "./format"
 import { liveRate } from "./rate-model"
 import { TOTAL_SCOPE_LABELS } from "./settings"
@@ -212,7 +212,13 @@ export function createPanelContent(deps: {
   const sessionLines = (sessionID: string | undefined): string[] => {
     if (!sessionID) return []
     const lines: string[] = ["── 当前会话 ──"]
-    const running = context.data?.session?.status?.(sessionID) === "running"
+    // 0.7.21: wrap the host status() read — see footer-status.tsx; a
+    // throwing client degrades to "not running" instead of breaking the
+    // panel header build.
+    let running = false
+    try {
+      running = context.data?.session?.status?.(sessionID) === "running"
+    } catch {}
     const started = starts.get(sessionID)
     const last = lastDurations.get(sessionID)
     const currentTime = now()

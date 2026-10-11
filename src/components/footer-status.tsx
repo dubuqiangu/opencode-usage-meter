@@ -11,7 +11,7 @@
 // same way the sidebar block did. All dynamic reads now happen inside a
 // createMemo that the JSX interpolation reads, so the 500ms tick and the
 // stats signals drive the re-render directly.
-import { createMemo } from "solid-js"
+import { createMemo } from "solid-js/dist/solid.js"
 import { probeCount } from "../probe"
 import { fmtNum, format } from "../format"
 import { liveRate } from "../rate-model"
@@ -60,7 +60,15 @@ export function createFooterStatus(deps: {
     const statusText = createMemo(() => {
       probeCount("fmemo")
       const currentTime = now()
-      const running = context.data?.session?.status?.(sessionID) === "running"
+      // 0.7.21: the host client's status() can throw (e.g. after a server
+      // restart the client handle can go bad). `?.` only guards a missing
+      // method, not a throwing one — and a throw inside a memo now runs in
+      // the same reactive instance as the reconciler's effects, so it would
+      // poison the render chain. Degrade to "not running" instead.
+      let running = false
+      try {
+        running = context.data?.session?.status?.(sessionID) === "running"
+      } catch {}
       const started = starts.get(sessionID)
       const last = lastDurations.get(sessionID)
 
