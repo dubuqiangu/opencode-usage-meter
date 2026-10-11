@@ -139,6 +139,7 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 - **测试渲染器同样按需绘制**:改树之后要自己 `renderer.requestRender()` 再等帧——`waitForVisualIdle` 不会替你重画(这让第 4 条的假阴性更迷惑)
 - 主题 token(如 `fg="&text.muted"`)在无头下告警 `Invalid hex color, defaulting to magenta`,不影响断言
 - Windows:宿主日志 `~\.local\share\opencode\log\opencode.log` 被进程锁,读它要 `FileShare ReadWrite` 打开;PowerShell 先 `[Console]::OutputEncoding = UTF8` 再跑脚本,否则中文全花
+- **0.7.19 修订(实证):插件 console.error/output 根本不进 opencode.log**——2026-10-11 全量读取 26MB 宿主日志(横跨 0.7.8-0.7.18、宿主 2.0.x)得到 **0 行**插件输出,历史错误路径(如"session stats fetch failed")同样缺席,证明该通道从未通过。宿主日志只记自己的结构化事件;插件要落日志必须**自己写文件**(OMO-Slim 即如此,它的 `oh-my-opencode-slim.*.log` 是自己写的)。0.7.19 起探针直写 `~\.local\share\opencode\usage-meter-probe.log`
 
 ---
 
