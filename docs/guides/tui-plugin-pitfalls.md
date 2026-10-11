@@ -170,3 +170,11 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 **根因链条**:① peerDependencies 写 `>=0.5.8` 开放范围,`plugin update` 每次落盘都按**当时**最新解析——0.7.18 安装时解析到 0.5.17(正常),0.7.19 安装时上游刚发布 0.6.0 就解析到它;② 0.6.0 改了环境变量注册描述;③ 宿主把"同名环境变量、不同注册配置"当**硬失败**,插件在 stage=load 直接中止。本地 bun 单测 probe.ts 完全正常、OMO-Slim 的 tui2.js 也大量用 node:* 内建——两条反证都指向"不是 node: 导入的锅",别被 0.7.19 同批改动的探针文件通道带偏。
 
 **正确姿势**:@opentui/core 与 @opentui/solid 的 peerDependencies **精确钉版**(0.7.20 起钉 `0.5.17`,即 0.7.18 实证可加载的 0.5.x 尾版),不用 `^`/`>=` 开放范围。宿主升级捆绑的 @opentui 换代后需重新核对钉哪个版本(反向冲突同样会炸)。solid-js 的范围刻意不动——它是 #13 探针实验的变量,不与本次修复混批。
+
+## 15. prerelease 版本号会让 `plugin update` 无限挂起(0.7.17-probe 实证,0.7.20 后补录)
+
+**症状**:发探针版拟用 `0.7.17-probe`,`opencode plugin update` 三次挂起超时;GitHub 三端点(repos/tags/releases)逐一 curl 全通,排除网络与仓库侧问题;把版本号改成平铺的 `0.7.17` 后 update 秒级成功。
+
+**根因**:宿主 update 流程对带 prerelease 后缀的版本号处理有坑(疑似降级比较/匹配逻辑死等),`-probe` 这类后缀即触发。
+
+**正确姿势**:发版版本号**只用平铺 semver 补丁位推进**(0.7.17 → 0.7.18),探针版/试验版也照常占用正式版本号,探针性质写进 commit message 和 changelog 即可。证据链见 [../decisions/changelog.md](../decisions/changelog.md) 0.7.17 条目。
