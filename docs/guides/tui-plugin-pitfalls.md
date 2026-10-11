@@ -162,3 +162,11 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 **根因候选(定案前不写死)**:① 裸 `import from "solid-js"` 命中 exports map 的 `node` 条件 → `dist/server.js`(SSR 构建:createSignal 永不通知、createMemo 只算一次、createEffect 是空函数;solid-js 1.9.12 无 bun 条件);② 模块实例分裂的真机版(第 4 条)。@opentui/solid 内部一律 import `solid-js/dist/solid.js`(客户端构建),故 reconciler 是活的,而插件裸导入可能不是。
 
 **正确姿势(待定案)**:TUI 插件的 solid 原语不从裸 `"solid-js"` 取得;发版前在 setup 期打一条实例同一性探针日志(比较 `createSignal === (await import("solid-js/dist/solid.js")).createSignal` 等)。
+
+## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
+
+**症状**:0.7.19 发版后用户完整重启,插件直接加载失败,宿主日志(stage=load)报 `Environment variable "OPENTUI_FORCE_UNICODE" is already registered with different configuration`——Existing 是 "Force Mode 2026 Unicode support…"(宿主/先加载的 0.5.x 注册的),New 是 "Use the Unicode width method (mode 2027)…"(本插件 stamp 里的 @opentui 0.6.0 注册的)。
+
+**根因链条**:① peerDependencies 写 `>=0.5.8` 开放范围,`plugin update` 每次落盘都按**当时**最新解析——0.7.18 安装时解析到 0.5.17(正常),0.7.19 安装时上游刚发布 0.6.0 就解析到它;② 0.6.0 改了环境变量注册描述;③ 宿主把"同名环境变量、不同注册配置"当**硬失败**,插件在 stage=load 直接中止。本地 bun 单测 probe.ts 完全正常、OMO-Slim 的 tui2.js 也大量用 node:* 内建——两条反证都指向"不是 node: 导入的锅",别被 0.7.19 同批改动的探针文件通道带偏。
+
+**正确姿势**:@opentui/core 与 @opentui/solid 的 peerDependencies **精确钉版**(0.7.20 起钉 `0.5.17`,即 0.7.18 实证可加载的 0.5.x 尾版),不用 `^`/`>=` 开放范围。宿主升级捆绑的 @opentui 换代后需重新核对钉哪个版本(反向冲突同样会炸)。solid-js 的范围刻意不动——它是 #13 探针实验的变量,不与本次修复混批。
