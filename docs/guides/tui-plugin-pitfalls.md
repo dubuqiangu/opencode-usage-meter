@@ -155,13 +155,13 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 *实证来源:opencode-usage-meter 0.7.8/0.7.10/0.7.11 三轮修复;OMO-Slim 落盘包对照;@opentui/solid 0.4.5/0.5.14 源码;8 个无头探针脚本。相关决策记录见 [../decisions/changelog.md](../decisions/changelog.md)。*
 
-## 13. 插件与 @opentui/solid 必须同 solid-js 实例——裸导入产出"挂载期快照树"(0.7.21 定案)
+## 13. "谁插入函数子节点,谁拥有渲染 effect"——插件 slot 不许把函数子节点交给宿主去插(0.7.22 机制终版)
 
-**症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。屏幕有两种表现、同一条根因链:挂载时数据已就绪 → 显示冻结旧值;挂载时无数据 → 相关段按设计隐藏且永不出现(footer 指标整段不见、右栏 tok/s 消失)。
+**症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。屏幕有两种表现、同一条根因链:挂载时数据已就绪 → 显示冻结旧值(⏱ 定格不走秒、tok/s 停旧值);挂载时无数据 → 相关段按设计隐藏且永不出现(footer 指标整段不见、右栏 tok/s "消失"、轮次中重挂时定格"运行中但速率未播种"瞬态)。另:`requestRender` 每拍都被调、探针里 memo 重算上万次——树死但插件侧全活。
 
-**定案(0.7.20 探针真机两轮,2026-10-11)**:① **H1 证伪**——`bare-effect` 探针从 #1 推进到 #11680,宿主 bun 把裸 `"solid-js"` 解析成了**可用的响应式构建**(非 exports-map node 条件的 SSR 空函数);② **真根因 = 同构建双模块实例**——`solid-id` 探针显示 `bareSignalEqDist:false`(裸导入 ≠ `dist/solid.js` 函数引用)。solid 的响应式全局(observer 栈)是**每模块实例私有**的:@opentui/solid 的 insertExpression 用 `dist/solid.js` 实例建叶子渲染 effect,读插件裸实例的 memo 时,memo 记订阅查的是自己实例的 observer 栈 → **登记不进去**;③ **实证**:组件 memo 重算 12000+ 次(`smemo`),叶子 thunk/宿主 effect 只求值恰等于 slot 重挂数的次数(`sthunk`/`otui-effect` 各 6 次)——memo 活着、通知链断着;`tick` 每拍 `requestRender` 万次,重绘的永远是那棵死的快照树。
+**机制链(0.7.20-0.7.22 三轮真机探针 + 源码取证)**:① **H1 证伪**——宿主 bun 把裸 `"solid-js"` 解析成可用响应式构建(SSR 空函数论不成立);② **同构建双模块实例确实存在且必须消除**——solid 的响应式全局(observer 栈)每模块实例私有,跨实例订阅登记不进;0.7.21 统一 `dist/solid.js` 后探针 `bareSignalEqDist:true`,但**叶子 thunk 仍只等于重挂数**——实例统一是必要非充分;③ **终版根因 = effect 归属**:slot render 直接返回含函数子节点的 JSX 时,执行 insertExpression 的是**宿主**——用宿主自己的 @opentui/solid 拷贝和宿主图里的 solid 实例建 createRenderEffect;插件 memo 在插件图里,跨图订阅失败,叶子 thunk 只在挂载时求值一次。0.7.10/0.7.16 的"函数子节点包裹"修复依赖"谁挂树谁建 effect",而真机上挂树的永远是宿主——这就是四轮代码审查全过、真机全冻的原因。OMO-Slim 落盘包实证活体模式:`reactiveElement` 返回前用**自己的** @opentui/solid `insert` 把 render 函数插进 core box,effect 全部活在自己图里,宿主只拿到普通 Renderable。
 
-**正确姿势(0.7.21 已实施)**:src/ 全部 solid 原语导入一律走 `"solid-js/dist/solid.js"`(与 @opentui/solid 内部同路径、同实例,订阅握手成立)——createSignal/createMemo/createEffect/createRoot 七处导入行全部统一,禁止裸 `"solid-js"`。配套:宿主 status() 客户端读取在三处 memo/构建路径上加 try 包裹(服务重启后客户端可能抛错,`?.` 防不住方法体抛错;统一实例后一处抛错会毒化整条渲染链)。OMO-Slim 的 sidebar 行长期 live 更新即是同款实证。探针证据链:`~\.local\share\opencode\usage-meter-probe.log` 2026-10-11 两轮干净进程。
+**正确姿势(0.7.22 已实施)**:两层缺一不可——(a) 插件全部 solid 原语导入走 `"solid-js/dist/solid.js"`(与插件图内 @opentui/solid 的 insert 同实例);(b) 每个动态 slot 的 render 一律返回 `createReactiveSlotMount` 的 root box(见 `src/reactive-mount.ts`):插件自己 `createElement("box")` + `insert(box, renderFn)`,renderFn 内才是真正组件;宿主重挂时 swap 旧图即 dispose(footer 高频重挂,不换图会每 500ms tick 泄漏一条写死节点的 effect 链);teardown 全量 release。配套:宿主 status() 读取 try 包裹(服务重启后客户端可抛,毒化的是插件图整条链)。探针证据链:`~\.local\share\opencode\usage-meter-probe.log` 2026-10-11/12 多轮进程。
 
 ## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
 

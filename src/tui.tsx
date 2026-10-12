@@ -37,6 +37,9 @@ import { createStatsPanel } from "./components/stats-panel"
 import { createSettingsDialog } from "./components/settings-dialog"
 import { createSidebarMetrics } from "./components/sidebar-metrics"
 import { createFooterStatus } from "./components/footer-status"
+// 0.7.22: slot mounts that create their render effects inside the plugin's
+// own module graph (see reactive-mount.ts — pitfall #13 verdict).
+import { createReactiveSlotMount } from "./reactive-mount"
 
 export default Plugin.define({
   id: "usage-meter",
@@ -210,23 +213,32 @@ export default Plugin.define({
     const { SidebarMetrics } = sidebarMetrics
     const { FooterStatus } = footerStatus
 
+    // 0.7.22: per-slot reactive mounts. The slot render returns a core box
+    // whose function child was inserted by OUR @opentui/solid copy, so the
+    // render effects (and every memo they read) live in the plugin's own
+    // module graph instead of the host's frozen snapshot (pitfall #13).
+    const panelMount = createReactiveSlotMount(true)
+    const sidebarMount = createReactiveSlotMount(true)
+    const footerMount = createReactiveSlotMount(false)
+
     // --- /usage-full stats view: sidebar panel (in-session) + dialog fallback ---
     let unregisterPanel: any
     try {
       unregisterPanel = context.ui.slot({
         append: "session.panel",
-        // v0.7.12: same reactive wrap as the sidebar/footer slots — the
-        // host does not track a directly returned element, so the panel
-        // body (header clock, detail tables) used to freeze at its first
-        // paint. The non-matching render path also releases the panel's
-        // "f" fullscreen keymap layer (see createStatsPanel).
+        // v0.7.12: the panel body (header clock, detail tables) froze at its
+        // first paint until the render was wrapped reactively. The
+        // non-matching render path also releases the panel's "f" fullscreen
+        // keymap layer (see createStatsPanel).
+        // v0.7.22: the wrap is now a plugin-graph reactive mount
+        // (reactive-mount.ts) — host-side insertion of function children
+        // produced a mount-time snapshot on the real machine.
         render: (panel: any) => {
-          if (panel?.name !== PANEL_NAME) statsPanel.disposeFullscreenLayer()
-          return (
-            <box width="100%" flexDirection="column">
-              {() => (panel?.name === PANEL_NAME ? <StatsPanel panel={panel} /> : null)}
-            </box>
-          )
+          if (panel?.name !== PANEL_NAME) {
+            statsPanel.disposeFullscreenLayer()
+            return <box width="100%" flexDirection="column" />
+          }
+          return panelMount.swap(() => <StatsPanel panel={panel} />)
         },
       })
     } catch (error) {
@@ -237,20 +249,17 @@ export default Plugin.define({
     try {
       unregisterSidebarSlot = context.ui.slot({
         append: "sidebar.content",
-        // v0.7.10: the host slot render does not track signal reads from a
-        // directly returned element, so the block never re-rendered on its
-        // own — the idle ⏱ froze and 0.7.9 header clicks flipped the store
-        // without any visible change. Wrapping the component in a function
-        // child lets the reconciler's insertExpression build a tracked
-        // render effect — the same reactiveElement pattern OMO-Slim ships
-        // for its sidebar rows.
+        // v0.7.10/v0.7.16: function-child wrapping never made this block live
+        // on the real machine — the host inserts those children with its own
+        // @opentui/solid/solid-js instances, so the tracked effects never saw
+        // our memos and the block stayed a mount-time snapshot (pitfall #13,
+        // verdict 2026-10-12). v0.7.22: the render now returns a core box the
+        // plugin itself inserted the component into (reactive-mount.ts), the
+        // proven OMO-Slim reactiveElement pattern.
         render: (sidebarProps: any) => {
           probeCount("slot-sidebar")
-          return sidebarProps?.sessionID ? (
-            <box width="100%" flexDirection="column">
-              {() => <SidebarMetrics sessionID={sidebarProps.sessionID} />}
-            </box>
-          ) : null
+          if (!sidebarProps?.sessionID) return null
+          return sidebarMount.swap(() => <SidebarMetrics sessionID={sidebarProps.sessionID} />)
         },
       })
     } catch (error) {
@@ -372,26 +381,22 @@ export default Plugin.define({
     const statsInterval = setInterval(() => statsSource.fetchTotals(), 60_000)
 
     // v0.7.12: the footer slot is registered like every other slot now —
+    // v0.7.12: the footer slot is registered like every other slot now —
     // a bare call used to be the one unprotected registration (and its
-    // unregister the one unprotected teardown). The render is function-child
-    // wrapped so the body falls into an owned render effect; a host-driven
-    // re-mount then disposes the old memo instead of stacking untracked
-    // ones on every footer re-render.
-    // v0.7.13: the wrapper carries no layout props — the footer is a
-    // horizontal context and a width="100%"/column box would impose the
-    // sidebar's vertical shape on it; only the function child (the
-    // owned-effect goal) matters here.
+    // unregister the one unprotected teardown).
+    // v0.7.22: the render returns a plugin-graph reactive mount's root box
+    // (no layout props — the footer is a horizontal context and a
+    // width="100%"/column box would impose the sidebar's vertical shape on
+    // it). Host-side insertion of the function child built the render
+    // effect in the host's module graph, where our memos can never
+    // register — the root cause of the frozen footer (pitfall #13).
     let unregisterFooterSlot: any
     try {
       unregisterFooterSlot = context.ui.slot({
         append: "prompt.footer.status",
         render: (slotProps: any) => {
           probeCount("slot-footer")
-          return (
-            <box>
-              {() => <FooterStatus slotProps={slotProps} />}
-            </box>
-          )
+          return footerMount.swap(() => <FooterStatus slotProps={slotProps} />)
         },
       })
     } catch (error) {
@@ -409,6 +414,11 @@ export default Plugin.define({
         } catch {}
       }
       statsSource.release()
+      // v0.7.22: dispose any live slot mount's reactive graph (idempotent
+      // when the host already remounted past it).
+      footerMount.release()
+      sidebarMount.release()
+      panelMount.release()
       if (typeof unregisterFooterSlot === "function") {
         try {
           unregisterFooterSlot()
