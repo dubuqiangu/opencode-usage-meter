@@ -12,8 +12,18 @@
 // host, insert the render function into a plain core box OURSELVES, so every
 // render effect lives in the plugin's own module graph — the same graph as
 // our signals and memos — and updates propagate normally.
+//
+// Renderer context (0.7.23, real-machine crash "No renderer found"):
+// @opentui/solid's createElement resolves the renderer via
+// useContext(RendererContext) — a solid context carried on the OWNER chain.
+// During our slot render call the host has that context provided (that's how
+// the old JSX path worked at all), but createRoot() creates a DETACHED root
+// whose context is null unless a detachedOwner is passed. Pass the ambient
+// owner (getOwner(), captured inside swap() while the host-called slot render
+// is on the stack) so the new root inherits the same context object and
+// createElement can find the renderer.
 import { createElement, insert, setProp } from "@opentui/solid"
-import { createRoot } from "solid-js/dist/solid.js"
+import { createRoot, getOwner } from "solid-js/dist/solid.js"
 
 export type SlotMount = {
   root: any
@@ -22,6 +32,10 @@ export type SlotMount = {
 
 function mountReactiveRoot(render: () => any, verticalLayout: boolean): SlotMount {
   let disposeOwner: (() => void) | undefined
+  // swap() runs inside the host-called slot render, so the ambient owner
+  // carries the host-provided RendererContext; hand it to createRoot so the
+  // detached root inherits that context (solid: root.context = current.context).
+  const ambientOwner = getOwner()
   const root = createRoot((dispose) => {
     disposeOwner = dispose
     const box = createElement("box")
@@ -31,7 +45,7 @@ function mountReactiveRoot(render: () => any, verticalLayout: boolean): SlotMoun
     }
     insert(box, render)
     return box
-  })
+  }, ambientOwner ?? undefined)
   return {
     root,
     dispose: () => {

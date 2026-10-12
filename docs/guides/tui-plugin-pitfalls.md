@@ -163,6 +163,8 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 **正确姿势(0.7.22 已实施)**:两层缺一不可——(a) 插件全部 solid 原语导入走 `"solid-js/dist/solid.js"`(与插件图内 @opentui/solid 的 insert 同实例);(b) 每个动态 slot 的 render 一律返回 `createReactiveSlotMount` 的 root box(见 `src/reactive-mount.ts`):插件自己 `createElement("box")` + `insert(box, renderFn)`,renderFn 内才是真正组件;宿主重挂时 swap 旧图即 dispose(footer 高频重挂,不换图会每 500ms tick 泄漏一条写死节点的 effect 链);teardown 全量 release。配套:宿主 status() 读取 try 包裹(服务重启后客户端可抛,毒化的是插件图整条链)。探针证据链:`~\.local\share\opencode\usage-meter-probe.log` 2026-10-11/12 多轮进程。
 
+**0.7.23 增补——createRoot 分离根会丢 RendererContext**:0.7.22 真机首启即崩,宿主报 `Plugin usage-meter crashed in slot sidebar.content: No renderer found`。机制:@opentui/solid 的 `createElement` 内部是 `useContext(RendererContext)`——renderer 挂在 **solid owner 链的 context** 上(宿主调 slot render 时已提供,这正是旧 JSX 路径能建 box 的原因);而 solid 的 `createRoot(fn)` 不带第二参数时建**分离根**(`root.context = null`),context 查找落空 → `createElement("box")` 抛错。修复:`swap()` 恰在宿主调用的 slot render 栈上执行,此刻 `getOwner()` 拿到的 ambient owner 就带着宿主提供的 context,把它作为 `createRoot` 第二参数(detachedOwner)传入——solid 源码实证 `root.context = current.context`(引用继承),新根即继承 RendererContext。要点:mount 必须在 slot render 时机(而非 setup 期)捕获 owner,setup 期 `getOwner()` 为 null。
+
 ## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
 
 **症状**:0.7.19 发版后用户完整重启,插件直接加载失败,宿主日志(stage=load)报 `Environment variable "OPENTUI_FORCE_UNICODE" is already registered with different configuration`——Existing 是 "Force Mode 2026 Unicode support…"(宿主/先加载的 0.5.x 注册的),New 是 "Use the Unicode width method (mode 2027)…"(本插件 stamp 里的 @opentui 0.6.0 注册的)。
