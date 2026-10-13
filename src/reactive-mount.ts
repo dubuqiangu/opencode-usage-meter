@@ -1,76 +1,63 @@
-// Slot mounts that own their reactive effects (0.7.22).
+// Slot mounts following the OMO-Slim reactiveElement pattern (0.7.24).
 //
-// Real-machine verdict (pitfall #13, 2026-10-12 probes): when a slot render
-// returns JSX whose function children are meant to become tracked thunks, it
-// is the HOST that inserts those children — with the host's own
-// @opentui/solid copy and its own solid-js instance. The render effects land
-// in the host's module graph; our plugin-side memos can never register with
-// them (solid's observer stack is per module instance), so the drawn tree
-// freezes at the mount-time snapshot while our memos recompute forever.
+// Real-machine case history (pitfall #13/#15, 2026-10-11..14):
+// - Host-side insertion of function children puts the render effects in the
+//   host's graph while our memos lived elsewhere — the screen froze at the
+//   mount-time snapshot (0.7.8-0.7.21).
+// - 0.7.22 fixed the ownership direction but added a detached createRoot:
+//   `createElement` resolves the renderer via useContext(RendererContext),
+//   which a detached root cannot see ("No renderer found" on the real
+//   machine — crashes in slot renders).
+// - 0.7.24 removed the peerDependencies shadow copies, so "solid-js" and
+//   "@opentui/solid" now resolve to the host-provided modules — the same
+//   graph the host's slot machinery runs in, exactly like OMO-Slim, which
+//   ships with no @opentui/solid-js deps at all and imports bare
+//   specifiers.
 //
-// The fix mirrors OMO-Slim's reactiveElement: before the element reaches the
-// host, insert the render function into a plain core box OURSELVES, so every
-// render effect lives in the plugin's own module graph — the same graph as
-// our signals and memos — and updates propagate normally.
-//
-// Renderer context (0.7.23, real-machine crash "No renderer found"):
-// @opentui/solid's createElement resolves the renderer via
-// useContext(RendererContext) — a solid context carried on the OWNER chain.
-// During our slot render call the host has that context provided (that's how
-// the old JSX path worked at all), but createRoot() creates a DETACHED root
-// whose context is null unless a detachedOwner is passed. Pass the ambient
-// owner (getOwner(), captured inside swap() while the host-called slot render
-// is on the stack) so the new root inherits the same context object and
-// createElement can find the renderer.
+// This module now mirrors OMO-Slim's reactiveElement exactly: build a core
+// box with createElement, insert the render fn at the slot-render ambient
+// position. No createRoot — the insert's render effect lands in the same
+// solid graph that is active during the slot render, where our
+// signals/memos are first-class dependencies and the slot machinery's
+// RendererContext provider is on the owner chain (that is why plain
+// createElement works here and did not inside a detached root). Lifecycle:
+// the host slot machinery re-evaluates the render on remounts and solid
+// disposes the previous owned effect tree on computation re-runs — the
+// same lifecycle OMO-Slim's sidebar lives by.
 import { createElement, insert, setProp } from "@opentui/solid"
-import { createRoot, getOwner } from "solid-js/dist/solid.js"
 
 export type SlotMount = {
   root: any
+  // Lifecycle is owned by the host slot machinery's computation tree (see
+  // header) — nothing to dispose from our side; kept for API compatibility.
   dispose: () => void
 }
 
 function mountReactiveRoot(render: () => any, verticalLayout: boolean): SlotMount {
-  let disposeOwner: (() => void) | undefined
-  // swap() runs inside the host-called slot render, so the ambient owner
-  // carries the host-provided RendererContext; hand it to createRoot so the
-  // detached root inherits that context (solid: root.context = current.context).
-  const ambientOwner = getOwner()
-  const root = createRoot((dispose) => {
-    disposeOwner = dispose
-    const box = createElement("box")
-    if (verticalLayout) {
-      setProp(box, "width", "100%")
-      setProp(box, "flexDirection", "column")
-    }
-    insert(box, render)
-    return box
-  }, ambientOwner ?? undefined)
+  const box = createElement("box")
+  if (verticalLayout) {
+    setProp(box, "width", "100%")
+    setProp(box, "flexDirection", "column")
+  }
+  insert(box, render)
   return {
-    root,
-    dispose: () => {
-      try {
-        disposeOwner?.()
-      } catch {}
-    },
+    root: box,
+    dispose: () => {},
   }
 }
 
-// Per-slot mount lifecycle: every host-driven slot re-render swaps in a
-// fresh reactive root and disposes the previous root's reactive graph. The
-// host re-renders the footer slot on nearly every input event — without the
-// swap, each remount would leak a live effect chain writing into detached
-// renderables on every 500ms tick.
+// Per-slot mount lifecycle. Every host-driven slot re-render swaps in a
+// fresh mount; the previous mount's effect tree is torn down by the host
+// machinery re-evaluating the slot (solid disposes a computation's owned
+// tree before re-running it).
 export function createReactiveSlotMount(verticalLayout: boolean) {
   let current: SlotMount | undefined
   return {
     swap(render: () => any): any {
-      current?.dispose()
       current = mountReactiveRoot(render, verticalLayout)
       return current.root
     },
     release() {
-      current?.dispose()
       current = undefined
     },
   }

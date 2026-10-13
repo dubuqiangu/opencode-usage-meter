@@ -25,9 +25,12 @@
 //   session.step.ended / session.step.failed -> exact tokens { tokens: { output, ... } }
 //   message.part.delta / message.updated kept as legacy fallbacks (guarded).
 import { Plugin } from "@opencode/plugin/tui"
-import { createEffect, createMemo, createRoot, createSignal } from "solid-js/dist/solid.js"
-import * as opentuiSolid from "@opentui/solid"
-import { probeCount, probeNote } from "./probe"
+// 0.7.24: bare "solid-js" — the host provides solid-js and @opentui/* to
+// plugin TUI code as externalized modules (OMO-Slim ships with none in its
+// stamp and imports bare specifiers). Declaring them as peerDependencies
+// installed PARASITE copies into the stamp whose solid instances are never
+// active during host slot renders — "No renderer found" (pitfall #13/#15).
+import { createSignal } from "solid-js"
 import { createCalibration } from "./calibration"
 import { createSettings } from "./settings"
 import { createStatsSource } from "./stats-source"
@@ -47,70 +50,6 @@ export default Plugin.define({
     // Ticking clock drives the elapsed recompute while a run is active, and
     // detects the midnight rollover for the daily usage stats.
     const [now, setNow] = createSignal(Date.now())
-
-    // --- 0.7.17-probe (temporary; remove before the next release) --------
-    // P5: context/renderer shape snapshot (requestRender availability).
-    try {
-      probeNote(
-        "ctx",
-        () =>
-          `ctxKeys=${Object.keys(context).join(",")} ` +
-          `rendererKeys=${context.renderer ? Object.keys(context.renderer).join(",") : "none"} ` +
-          `requestRenderType=${typeof context.renderer?.requestRender} ` +
-          `bun=${(globalThis as any).Bun?.version ?? "n/a"}`,
-      )
-    } catch (error) {
-      probeNote("ctx-err", () => String(error))
-    }
-    // P7a: solid module identity (reference comparison). @opentui/solid's
-    // internals import "solid-js/dist/solid.js" (the client build) and its
-    // `effect` export IS solid's createRenderEffect. If the bare "solid-js"
-    // specifier here resolved to dist/server.js (the exports-map "node"
-    // condition), this plugin's signals never notify and its memos compute
-    // exactly once — the whole tick->now->memo chain is inert.
-    try {
-      const bareCreateSignal = createSignal
-      const bareCreateMemo = createMemo
-      void import("solid-js/dist/solid.js")
-        .then((distSolid: any) => {
-          probeNote(
-            "solid-id",
-            () =>
-              `bareSignalEqDist:${String(bareCreateSignal === distSolid.createSignal)} ` +
-              `bareMemoEqDist:${String(bareCreateMemo === distSolid.createMemo)} ` +
-              `otuiEffectEqDist:${String(
-                (opentuiSolid as any).effect === distSolid.createRenderEffect,
-              )} ` +
-              `distMemoEqOpentuiMemo:${String(
-                typeof (opentuiSolid as any).memo === "function" &&
-                  (opentuiSolid as any).memo === distSolid.createMemo,
-              )}`,
-          )
-        })
-        .catch((error: any) => probeNote("solid-id-err", () => String(error)))
-    } catch (error) {
-      probeNote("solid-id-err", () => String(error))
-    }
-    // P7b: functional probe — is bare-side reactivity alive at all? A
-    // client-build createEffect re-runs on every setNow (one #20 line per
-    // ~10s idle); the server build's createEffect is a no-op, so even #1
-    // never appears. That absence is itself the H1 fingerprint.
-    // P7b root dispose captured for teardown (v0.7.18: the dropped return
-    // value was a bounded leak — the effect lived on after plugin unload).
-    let disposeBareEffectProbe: (() => void) | undefined
-    try {
-      disposeBareEffectProbe = createRoot(() => {
-        let bareEffectRuns = 0
-        createEffect(() => {
-          now()
-          bareEffectRuns += 1
-          if (bareEffectRuns === 1 || bareEffectRuns % 20 === 0)
-            probeNote("bare-effect", () => `#${bareEffectRuns}`)
-        })
-      })
-    } catch (error) {
-      probeNote("bare-effect-err", () => String(error))
-    }
 
     // Module factories. Creation order preserves the original storage-store
     // subscription order (calibration store first, then settings store).
@@ -169,10 +108,9 @@ export default Plugin.define({
     })
 
     const timer = setInterval(() => {
-      // 0.7.17-probe: full-body guard — an exception escaping here (e.g. a
+      // 0.7.17: full-body guard — an exception escaping here (e.g. a
       // now-observer throwing inside setNow's synchronous flush) would
-      // silently skip requestRender and possibly kill the interval. Log it
-      // instead of losing the chain silently.
+      // silently skip requestRender and possibly kill the interval.
       try {
         setNow(Date.now())
         statsSource.checkMidnightRollover()
@@ -182,21 +120,12 @@ export default Plugin.define({
         // any stats or settings change becomes visible within 500ms even
         // when nothing else drives a host repaint (OMO-Slim requests one
         // after every snapshot update for the same reason).
-        let requestRenderStatus = "ok"
         try {
           if (typeof context.renderer?.requestRender === "function") {
             context.renderer.requestRender()
-            requestRenderStatus = "called"
-          } else {
-            requestRenderStatus = "missing"
           }
-        } catch (error) {
-          requestRenderStatus = `threw:${String(error)}`
-        }
-        probeCount("tick", () => `now=${now()} rr=${requestRenderStatus}`)
-      } catch (error) {
-        probeCount("tick-err", () => (error instanceof Error ? error.stack ?? String(error) : String(error)))
-      }
+        } catch {}
+      } catch {}
     }, 500)
 
     const subs: Array<() => void> = []
@@ -213,10 +142,12 @@ export default Plugin.define({
     const { SidebarMetrics } = sidebarMetrics
     const { FooterStatus } = footerStatus
 
-    // 0.7.22: per-slot reactive mounts. The slot render returns a core box
-    // whose function child was inserted by OUR @opentui/solid copy, so the
-    // render effects (and every memo they read) live in the plugin's own
-    // module graph instead of the host's frozen snapshot (pitfall #13).
+    // 0.7.22-0.7.24: per-slot reactive mounts (reactive-mount.ts, the
+    // OMO-Slim reactiveElement pattern): the slot render returns a core box
+    // that the plugin itself inserted the component into, so the render
+    // effects are not at the mercy of host-side insertion of function
+    // children (pitfall #13). 0.7.24: with the host-provided solid graph
+    // (peers removed), the insert effects and our memos are one graph.
     const panelMount = createReactiveSlotMount(true)
     const sidebarMount = createReactiveSlotMount(true)
     const footerMount = createReactiveSlotMount(false)
@@ -251,13 +182,12 @@ export default Plugin.define({
         append: "sidebar.content",
         // v0.7.10/v0.7.16: function-child wrapping never made this block live
         // on the real machine — the host inserts those children with its own
-        // @opentui/solid/solid-js instances, so the tracked effects never saw
+        // @opentui/solid/solid-js graph, so the tracked effects never saw
         // our memos and the block stayed a mount-time snapshot (pitfall #13,
-        // verdict 2026-10-12). v0.7.22: the render now returns a core box the
+        // verdict 2026-10-12). v0.7.22+: the render returns a core box the
         // plugin itself inserted the component into (reactive-mount.ts), the
         // proven OMO-Slim reactiveElement pattern.
         render: (sidebarProps: any) => {
-          probeCount("slot-sidebar")
           if (!sidebarProps?.sessionID) return null
           return sidebarMount.swap(() => <SidebarMetrics sessionID={sidebarProps.sessionID} />)
         },
@@ -395,7 +325,6 @@ export default Plugin.define({
       unregisterFooterSlot = context.ui.slot({
         append: "prompt.footer.status",
         render: (slotProps: any) => {
-          probeCount("slot-footer")
           return footerMount.swap(() => <FooterStatus slotProps={slotProps} />)
         },
       })
@@ -406,13 +335,6 @@ export default Plugin.define({
     return () => {
       clearInterval(timer)
       clearInterval(statsInterval)
-      // v0.7.18: release the P7b bare-effect probe root alongside the timers
-      // (its dispose was previously dropped — bounded leak).
-      if (typeof disposeBareEffectProbe === "function") {
-        try {
-          disposeBareEffectProbe()
-        } catch {}
-      }
       statsSource.release()
       // v0.7.22: dispose any live slot mount's reactive graph (idempotent
       // when the host already remounted past it).

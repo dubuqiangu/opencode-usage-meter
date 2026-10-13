@@ -3,7 +3,7 @@
 // detail tables), the sidebar panel contribution with its "f" fullscreen
 // keymap, and the /usage-full toggle command with its dialog fallback.
 // Split from tui.tsx in v0.7.x — behavior unchanged.
-import { createMemo } from "solid-js/dist/solid.js"
+import { createMemo } from "solid-js"
 import { PANEL_NAME } from "../panel-content"
 import type { PanelContentApi } from "../panel-content"
 

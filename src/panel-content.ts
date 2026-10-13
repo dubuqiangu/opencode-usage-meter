@@ -1,7 +1,7 @@
 // Panel content builders for the /usage-full stats view: the live session
 // header, the current-window / cumulative / subagent blocks, and the daily +
 // all-time detail tables. Split from tui.tsx in v0.7.x — behavior unchanged.
-import { createSignal } from "solid-js/dist/solid.js"
+import { createSignal } from "solid-js"
 import { fmtNum, fmtUSD, format } from "./format"
 import { liveRate } from "./rate-model"
 import { TOTAL_SCOPE_LABELS } from "./settings"

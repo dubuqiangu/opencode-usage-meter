@@ -6,7 +6,7 @@
 // rolling window (last 24h / 7d / 30d) — each scope is one extra read-only
 // query; only the active scope is fetched.
 // Split from tui.tsx in v0.7.x — behavior unchanged.
-import { createSignal } from "solid-js/dist/solid.js"
+import { createSignal } from "solid-js"
 import type { TotalScope } from "./settings"
 
 export type StatsSourceApi = {

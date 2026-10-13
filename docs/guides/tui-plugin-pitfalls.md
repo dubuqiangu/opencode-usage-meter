@@ -165,13 +165,17 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 **0.7.23 增补——createRoot 分离根会丢 RendererContext**:0.7.22 真机首启即崩,宿主报 `Plugin usage-meter crashed in slot sidebar.content: No renderer found`。机制:@opentui/solid 的 `createElement` 内部是 `useContext(RendererContext)`——renderer 挂在 **solid owner 链的 context** 上(宿主调 slot render 时已提供,这正是旧 JSX 路径能建 box 的原因);而 solid 的 `createRoot(fn)` 不带第二参数时建**分离根**(`root.context = null`),context 查找落空 → `createElement("box")` 抛错。修复:`swap()` 恰在宿主调用的 slot render 栈上执行,此刻 `getOwner()` 拿到的 ambient owner 就带着宿主提供的 context,把它作为 `createRoot` 第二参数(detachedOwner)传入——solid 源码实证 `root.context = current.context`(引用继承),新根即继承 RendererContext。要点:mount 必须在 slot render 时机(而非 setup 期)捕获 owner,setup 期 `getOwner()` 为 null。
 
+**0.7.24 终案——问题根本不在 createRoot,在"寄生拷贝"**:0.7.23(getOwner 继承)真机**仍然崩**,且探针 `otuiEffectEqDist:false` 早已示警:@opentui/solid 内部的 solid 实例与我们 src 的 dist 导入**从来不是同一个**(0.5.17 的 stamp 里 @opentui/solid 自带嵌套 solid-js)。决定性对照:**OMO-Slim 的 stamp 里既没有 @opentui/solid 也没有 solid-js**,其 `import { createElement, insert, setProp } from "@opentui/solid"` 与 `import { createSignal } from "solid-js"`(裸 specifier)解析到**宿主为插件 TUI 代码外置提供的模块**——与宿主 slot 机制同一个图,RendererContext/owner 链天然在场,`reactiveElement`(无 createRoot,ambient 位置 createElement+insert)活体。而我们 0.7.20 钉的 peerDependencies 让 stamp 装了**本地寄生拷贝**:我们的全部导入落在寄生拷贝上,寄生 solid 的 Owner 在宿主调 slot render 时永远是 null → `No renderer found` 必炸。修复(0.7.24):**peerDependencies 整体移除**(寄生拷贝不再安装,运行时解析落宿主拷贝)、src 全部 solid 导入改回裸 `"solid-js"`(宿主别名只证过裸 specifier;`dist/solid.js` 子路径未证)、reactive-mount 改为 OMO `reactiveElement` 逐字同款(无 createRoot——统一图下宿主 slot 机制的计算树负责生命周期,重挂时 solid 会 dispose 旧 owned effect 链)。探针(0.7.17-0.7.23)随之整体 revert,唯 tick 全包 try/catch 保留为永久改进。
+
 ## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
 
 **症状**:0.7.19 发版后用户完整重启,插件直接加载失败,宿主日志(stage=load)报 `Environment variable "OPENTUI_FORCE_UNICODE" is already registered with different configuration`——Existing 是 "Force Mode 2026 Unicode support…"(宿主/先加载的 0.5.x 注册的),New 是 "Use the Unicode width method (mode 2027)…"(本插件 stamp 里的 @opentui 0.6.0 注册的)。
 
 **根因链条**:① peerDependencies 写 `>=0.5.8` 开放范围,`plugin update` 每次落盘都按**当时**最新解析——0.7.18 安装时解析到 0.5.17(正常),0.7.19 安装时上游刚发布 0.6.0 就解析到它;② 0.6.0 改了环境变量注册描述;③ 宿主把"同名环境变量、不同注册配置"当**硬失败**,插件在 stage=load 直接中止。本地 bun 单测 probe.ts 完全正常、OMO-Slim 的 tui2.js 也大量用 node:* 内建——两条反证都指向"不是 node: 导入的锅",别被 0.7.19 同批改动的探针文件通道带偏。
 
-**正确姿势**:@opentui/core 与 @opentui/solid 的 peerDependencies **精确钉版**(0.7.20 起钉 `0.5.17`,即 0.7.18 实证可加载的 0.5.x 尾版),不用 `^`/`>=` 开放范围。宿主升级捆绑的 @opentui 换代后需重新核对钉哪个版本(反向冲突同样会炸)。solid-js 的范围刻意不动——它是 #13 探针实验的变量,不与本次修复混批。
+**0.7.24 订正——钉版比开放范围更糟:peers 本身就是病根**:0.7.20 钉 `0.5.17` 消除了版本漂移炸加载,但真机新证据(见 #13 0.7.24 终案)表明:**只要 peerDependencies 声明了 @opentui/* 或 solid-js,stamp 就会装出本地拷贝,插件的所有导入便落在与宿主 slot 机制不同的模块图上**——版本漂移炸加载只是它最响的一种死法,更阴的是寄生拷贝让 RendererContext/owner 链永不在场(`No renderer found`)、信号订阅跨图失效(整树冻结)。对照实证:OMO-Slim 的 package.json **完全不声明** @opentui/* 与 solid-js(无 dependencies/peerDependencies/devDependencies 条目),stamp 里也确实没有这些包,运行时裸 specifier(`"solid-js"`、`"@opentui/solid"`)由宿主外置提供、与宿主 slot 机制同图,活体。
+
+**正确姿势(0.7.24 定版)**:TUI 插件**不声明** @opentui/core、@opentui/solid、solid-js 的任何依赖条目——宿主为插件 TUI 代码外置提供它们(OMO-Slim 同款);src 里用**裸 specifier** 导入(`"solid-js"`/`"@opentui/solid"`,勿用 `solid-js/dist/solid.js` 子路径——宿主别名只实证过裸 specifier)。stamp 级 npm 安装没有 node_modules 可解析时,由宿主运行时接管;`@opencode/plugin` 保持在 dependencies。0.7.19 的 env-var 炸加载在此姿势下不复存在(寄生拷贝根本不会安装)。本地开发/UT:测试只 import 纯逻辑模块(format/rate-model/settings/calibration/session-metrics/stats-source),不经 solid,零 devDependency 也全绿;esbuild bundle 校验用 `--external:@opentui/* --external:solid-js` 免本地解析。
 
 ## 15. prerelease 版本号会让 `plugin update` 无限挂起(0.7.17-probe 实证,0.7.20 后补录)
 

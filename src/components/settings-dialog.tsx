@@ -7,7 +7,7 @@
 // repaint request) so the text also refreshes on non-reactive-store hosts,
 // the same fallback the footer/sidebar memos have always had.
 // Split from tui.tsx in v0.7.x — behavior unchanged.
-import { createMemo } from "solid-js/dist/solid.js"
+import { createMemo } from "solid-js"
 import type { SettingsApi, TotalScope } from "../settings"
 import { TOTAL_SCOPE_LABELS, nextTotalScope } from "../settings"
 

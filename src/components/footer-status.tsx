@@ -11,8 +11,7 @@
 // same way the sidebar block did. All dynamic reads now happen inside a
 // createMemo that the JSX interpolation reads, so the 500ms tick and the
 // stats signals drive the re-render directly.
-import { createMemo } from "solid-js/dist/solid.js"
-import { probeCount } from "../probe"
+import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
@@ -58,7 +57,6 @@ export function createFooterStatus(deps: {
     // always-read `now()` re-evaluates the memo every 500ms and picks up
     // their changes, matching the original "tick-driven" design.
     const statusText = createMemo(() => {
-      probeCount("fmemo")
       const currentTime = now()
       // 0.7.21: the host client's status() can throw (e.g. after a server
       // restart the client handle can go bad). `?.` only guards a missing
@@ -149,7 +147,6 @@ export function createFooterStatus(deps: {
     return (
       <text fg={muted}>
         {() => {
-          probeCount("fthunk")
           return statusText()
         }}
       </text>
