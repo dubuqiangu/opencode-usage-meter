@@ -194,3 +194,5 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 **根因(机制推演,置信度高)**:入口文件的顶层裸导入会触发 onResolve → 宿主运行时模块(OMO 单文件 bundle 恰是此形态);而**嵌套相对导入链里的裸 specifier 可能走 bun 的 native 加载快路径、不经插件回调**——@opentui/core/runtime-plugin.js 头注释自证"Bun may native-load node_modules ESM without firing onResolve for nested package imports"。我们裸 TSX 入口的 `@opentui/solid` 深藏在 reactive-mount.ts(入口相对导入的第二层),native 解析沿磁盘向上找不到包 → 加载失败。裸 TSX 形态等价于把"多文件相对导入图"强加给一个只对"入口级导入"做接管的运行时。
 
 **正确姿势(0.7.25)**:TUI 入口**预编译为单文件 ESM bundle**(OMO tui2.js 同构):`npm run build:tui` → `dist/tui.js`(esbuild `--bundle --format=esm`,`@opencode/*`/`@opentui/*`/`solid-js` external),`exports["./tui"]` 指向 dist;src 保留为源码与 UT 对象。单文件让全部裸导入提升到入口顶层 = OMO 的实证活体形态。dist/tui.js 随仓库提交(git 安装以仓库文件为准);verify-install 增加 dist 树镜像与 tui export 目标存在性检查。0.7.24 的无 createRoot ambient reactiveElement mount 与全裸 specifier 导入保持不变——预编译只改投递形态,不改运行时姿势。
+
+**真机终验(2026-10-14,0.7.25)**:完整重启后 footer ⏱/⚡、右栏 Stats 块、面板全部实时变动,响应式链活体——**#13 冻结悬案(0.7.8-0.7.24)就此整体闭环**:预编译单文件让全部裸导入解析到宿主运行时模块(与 slot 机制同图),效应归属、实例分裂、寄生拷贝、嵌套解析四类死法一并根除。
