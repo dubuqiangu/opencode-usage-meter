@@ -192,3 +192,27 @@ test("the step-refresh debounce survives a pending missing-client retry", async 
     console.error = originalError
   }
 })
+
+// --- withFetchTimeout (v0.7.18 race helper, exported v0.7.26) -------------
+
+test("withFetchTimeout passes the input through when the call settles in time", async () => {
+  const statsSource = createStatsSource({ client: {} })
+  const result = await statsSource.withFetchTimeout(
+    { from: 1, to: 2 },
+    async (input: Record<string, unknown>) => ({ echoed: input }),
+  )
+  assert.deepEqual(result, { echoed: { from: 1, to: 2 } })
+})
+
+test("withFetchTimeout rejects after 15s when the host call never settles", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const statsSource = createStatsSource({ client: {} })
+  const pending = statsSource.withFetchTimeout({}, () => new Promise(() => {}))
+  // Attach the handler before ticking — the race rejects inside tick, and an
+  // unhandled rejection at that moment fails the test before the assertion
+  // can run.
+  const rejection = assert.rejects(pending, /timed out/)
+  await t.mock.timers.tick(15_000)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await rejection
+})

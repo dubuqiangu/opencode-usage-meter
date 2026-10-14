@@ -311,7 +311,6 @@ export default Plugin.define({
     const statsInterval = setInterval(() => statsSource.fetchTotals(), 60_000)
 
     // v0.7.12: the footer slot is registered like every other slot now —
-    // v0.7.12: the footer slot is registered like every other slot now —
     // a bare call used to be the one unprotected registration (and its
     // unregister the one unprotected teardown).
     // v0.7.22: the render returns a plugin-graph reactive mount's root box

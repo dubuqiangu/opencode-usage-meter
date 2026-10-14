@@ -24,6 +24,7 @@ export type StatsSourceApi = {
   localMidnight: () => number
   scopeStartMs: (scope: TotalScope) => number
   unwrap: (res: any) => any
+  withFetchTimeout: (input: any, call: (input: any) => Promise<any>) => Promise<any>
   timezone: string | undefined
   release: () => void
 }
@@ -42,7 +43,7 @@ const ROLLING_WINDOW_MS: Record<Exclude<TotalScope, "today">, number> = {
 // flag self-heals in the existing finally.
 const STATS_FETCH_TIMEOUT_MS = 15_000
 
-const withFetchTimeout = async (
+export const withFetchTimeout = async (
   input: any,
   call: (input: any) => Promise<any>,
 ): Promise<any> => {
@@ -239,6 +240,7 @@ export function createStatsSource(
     localMidnight,
     scopeStartMs,
     unwrap,
+    withFetchTimeout,
     timezone,
     release,
   }

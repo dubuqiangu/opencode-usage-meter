@@ -33,6 +33,7 @@
 - 模型未配价时 cost 为 0,费用段隐藏
 - ctx% 模型档位(平台级):同 id 多 context-tier 变体时可能取错档位;服务端未暴露 per-request 实际档位,原生面板精度等同,不做修
 - `syncedChildren` 终身增长(0.7.6 审视确认,changelog 曾提及、此处补记):`/usage-full` 会话累计块每次渲染都会把新发现的子会话 id 记入模块级 Set 并触发一次性 `session.sync()`;Set 随插件实例生命周期只增不减。纯防重集合、体量为会话数量级、零宿主句柄,不做修
+- `sessionModels` Map 终身增长(0.7.26 审视确认,与 syncedChildren 同性质):calibration 的会话→模型记录随插件实例生命周期只增不减,体量为会话数量级、零宿主句柄,不做修
 
 **宿主依赖与生命周期**:
 

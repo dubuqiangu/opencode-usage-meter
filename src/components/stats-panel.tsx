@@ -68,11 +68,17 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
     if (opened !== true) {
       // Dialog fallback (no sidebar): still pass the current sessionID so
       // the live window/session/subagent blocks render when inside a session.
-      const route: any = context.ui?.router?.current?.()
-      const sid: string | undefined =
-        route?.type === "session"
-          ? (route.sessionID ?? route.params?.sessionID)
-          : route?.params?.sessionID
+      // v0.7.26: router.current() is a host client call that can throw on a
+      // stale handle; the fallback dialog tolerates a missing sessionID, so
+      // degrade instead of rejecting runTokensCommand (fired as void).
+      let sid: string | undefined
+      try {
+        const route: any = context.ui?.router?.current?.()
+        sid =
+          route?.type === "session"
+            ? (route.sessionID ?? route.params?.sessionID)
+            : route?.params?.sessionID
+      } catch {}
       try {
         context.ui.dialog.set({ size: "large", centered: true })
       } catch {}

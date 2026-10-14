@@ -36,7 +36,8 @@ export function createPanelContent(deps: {
 }): PanelContentApi {
   const { context, now } = deps
   const { starts, lastDurations, lastAvgRates, lastExactRates, rates } = deps.sessionMetrics
-  const { setTodayStats, statsCall, totalFor, localMidnight, unwrap, timezone } = deps.statsSource
+  const { setTodayStats, statsCall, totalFor, localMidnight, unwrap, timezone, withFetchTimeout } =
+    deps.statsSource
   const { totalScopeEnabled } = deps.settings
   const { calibOf } = deps.calibration
 
@@ -359,10 +360,15 @@ export function createPanelContent(deps: {
     }
     try {
       const baseInput: any = timezone ? { timezone } : {}
+      // v0.7.26: race both detail fetches against the 15s timeout like
+      // fetchToday/fetchRange (0.7.18) — a never-settling host call used to
+      // leave the panel on the loading state until the next 60s tick
+      // re-fired ensureDetail, stacking a new Promise.all on the dead one
+      // every tick. On timeout the error lands in the catch below.
       const [todayRes, allRes] = await Promise.all([
         // v0.6.4: numbers, not strings — the SDK input schema is `number`.
-        call({ ...baseInput, from: localMidnight(), to: Date.now() }),
-        call(baseInput),
+        withFetchTimeout({ ...baseInput, from: localMidnight(), to: Date.now() }, call),
+        withFetchTimeout(baseInput, call),
       ])
       const today = unwrap(todayRes)
       const all = unwrap(allRes)

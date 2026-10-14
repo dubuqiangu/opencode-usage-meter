@@ -307,6 +307,7 @@ function createStatsSource(context, totalScopeEnabled = () => "today") {
     localMidnight,
     scopeStartMs,
     unwrap,
+    withFetchTimeout,
     timezone,
     release
   };
@@ -626,7 +627,7 @@ var PANEL_NAME = "usage-meter.stats";
 function createPanelContent(deps) {
   const { context, now } = deps;
   const { starts, lastDurations, lastAvgRates, lastExactRates, rates } = deps.sessionMetrics;
-  const { setTodayStats, statsCall, totalFor, localMidnight, unwrap, timezone } = deps.statsSource;
+  const { setTodayStats, statsCall, totalFor, localMidnight, unwrap, timezone, withFetchTimeout: withFetchTimeout2 } = deps.statsSource;
   const { totalScopeEnabled } = deps.settings;
   const { calibOf } = deps.calibration;
   const [detail, setDetail] = createSignal2(void 0);
@@ -885,8 +886,8 @@ function createPanelContent(deps) {
       const baseInput = timezone ? { timezone } : {};
       const [todayRes, allRes] = await Promise.all([
         // v0.6.4: numbers, not strings — the SDK input schema is `number`.
-        call({ ...baseInput, from: localMidnight(), to: Date.now() }),
-        call(baseInput)
+        withFetchTimeout2({ ...baseInput, from: localMidnight(), to: Date.now() }, call),
+        withFetchTimeout2(baseInput, call)
       ]);
       const today = unwrap(todayRes);
       const all = unwrap(allRes);
@@ -953,8 +954,12 @@ function createStatsPanel(deps) {
       opened = false;
     }
     if (opened !== true) {
-      const route = context.ui?.router?.current?.();
-      const sid = route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID;
+      let sid;
+      try {
+        const route = context.ui?.router?.current?.();
+        sid = route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID;
+      } catch {
+      }
       try {
         context.ui.dialog.set({ size: "large", centered: true });
       } catch {
@@ -1247,7 +1252,12 @@ function createFooterStatus(deps) {
   const { calibOf } = deps.calibration;
   const FooterStatus = (componentProps) => {
     const slotProps = componentProps.slotProps;
-    const sessionID = slotProps?.sessionID ?? context.ui?.router?.current?.()?.params?.sessionID;
+    let sessionID;
+    try {
+      const route = context.ui?.router?.current?.();
+      sessionID = slotProps?.sessionID ?? (route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID);
+    } catch {
+    }
     if (!sessionID) return null;
     backfillLastTurn(sessionID);
     const statusText = createMemo4(() => {

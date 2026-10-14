@@ -41,8 +41,20 @@ export function createFooterStatus(deps: {
 
   const FooterStatus = (componentProps: { slotProps?: any }) => {
     const slotProps = componentProps.slotProps
-    const sessionID: string | undefined = slotProps?.sessionID
-      ?? context.ui?.router?.current?.()?.params?.sessionID
+    // v0.7.26: router.current() is a host client call like status() (see the
+    // 0.7.21 guard below) — a throwing stale handle would propagate through
+    // the slot render stack and kill the footer slot until re-mount, so
+    // degrade to undefined. The extraction mirrors stats-panel's superset
+    // form (route.sessionID on session routes) so both surfaces survive the
+    // same host route shape changes.
+    let sessionID: string | undefined
+    try {
+      const route: any = context.ui?.router?.current?.()
+      sessionID = slotProps?.sessionID
+        ?? (route?.type === "session"
+          ? (route.sessionID ?? route.params?.sessionID)
+          : route?.params?.sessionID)
+    } catch {}
     if (!sessionID) return null
 
     // v0.7.5: sessions opened after a TUI restart have no in-memory turn
