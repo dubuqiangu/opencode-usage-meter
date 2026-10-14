@@ -47,8 +47,9 @@ UI 槽位(append 模式,不覆盖原生内容)
 - **语法/JSX**:每次改动后 esbuild 校验
   `npx esbuild src/tui.tsx --loader:.tsx=tsx --jsx=automatic`
   (完整 tsc 不可行:`@opencode/plugin/tui` 仅由 OpenCode 运行时解析,本地无类型)
-- **import 解析**:bundle 校验
-  `npx esbuild src/tui.tsx --bundle --platform=node --external:@opencode/* --external:@opentui/* --external:solid-js`
+- **import 解析 + 发布产物**:每次改动后构建 TUI 入口 bundle(避坑 #16:宿主只对入口级裸导入提供运行时模块,裸 TSX 多文件形态真机 stage=load 解析失败)
+  `npm run build:tui` → `dist/tui.js`(单文件 ESM,`@opencode/*`/`@opentui/*`/`solid-js` 全 external)
+  dist/ 随仓库提交(git 安装以仓库文件为准),verify-install 校验 dist 镜像与 export 目标存在
 - **真机**:完整重启 TUI 后发起一轮对话,观察 footer/右栏/面板;stats 可经
   `opencode api get "/api/experimental/session/stats?from=<epoch_ms>"` 复现
 - 每个版本必须真机验证后再叠加新功能

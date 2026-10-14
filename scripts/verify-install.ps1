@@ -3,7 +3,8 @@
 #
 # Chain: local HEAD pushed -> plugin update -> plugin list commit match ->
 #        on-disk installed version match -> installed file tree mirrors the
-#        repo (src/test/docs counts) -> host opencode.json registration.
+#        repo (src/test/docs/dist counts) + tui export target exists ->
+#        host opencode.json registration.
 # Prints a PASS/FAIL line per check; exits 0 only when every check passes.
 #
 # Note: `opencode plugin update` returns BEFORE the install lands on disk,
@@ -81,6 +82,7 @@ Assert-Check "local HEAD is pushed (HEAD == origin/main)" ($localHead -eq $origi
 $expectedSrcCount = Count-TrackedFiles $repoRoot "src"
 $expectedTestCount = Count-TrackedFiles $repoRoot "test"
 $expectedDocsCount = Count-TrackedFiles $repoRoot "docs"
+$expectedDistCount = Count-TrackedFiles $repoRoot "dist"
 
 # --- one-click update (returns early — poll for the install below) -----------------
 Set-Location $env:USERPROFILE
@@ -118,6 +120,23 @@ $installedDocsCount = if ($installedPkg) { Count-Files (Join-Path $installedPkg 
 Assert-Check "installed src tree mirrors the repo" ($installedSrcCount -eq $expectedSrcCount) "installed=$installedSrcCount repo=$expectedSrcCount"
 Assert-Check "installed test tree mirrors the repo" ($installedTestCount -eq $expectedTestCount) "installed=$installedTestCount repo=$expectedTestCount"
 Assert-Check "installed docs tree mirrors the repo" ($installedDocsCount -eq $expectedDocsCount) "installed=$installedDocsCount repo=$expectedDocsCount"
+
+$installedDistCount = if ($installedPkg) { Count-Files (Join-Path $installedPkg "dist") } else { -1 }
+Assert-Check "installed dist tree mirrors the repo" ($installedDistCount -eq $expectedDistCount) "installed=$installedDistCount repo=$expectedDistCount"
+
+# The TUI entry ships as the precompiled bundle (pitfall #16): if the
+# exports target is missing from the stamp, the host fails at stage=load.
+$tuiExportTarget = $null
+if ($installedPkg) {
+  try {
+    $installedPkgJson = Get-Content (Join-Path $installedPkg "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($installedPkgJson.exports -is [System.Management.Automation.PSObject]) {
+      $tuiExportTarget = $installedPkgJson.exports."./tui"
+    }
+  } catch { $tuiExportTarget = $null }
+}
+$tuiExportExists = ($null -ne $tuiExportTarget) -and (Test-Path (Join-Path $installedPkg $tuiExportTarget))
+Assert-Check "tui export target exists in stamp" ($tuiExportExists) "export=$tuiExportTarget"
 
 # --- host registration ---------------------------------------------------------------
 $hostConfigPath = Join-Path $env:USERPROFILE ".config\opencode\opencode.json"

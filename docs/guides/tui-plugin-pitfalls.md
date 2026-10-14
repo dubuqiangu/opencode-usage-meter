@@ -184,3 +184,13 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 **根因**:宿主 update 流程对带 prerelease 后缀的版本号处理有坑(疑似降级比较/匹配逻辑死等),`-probe` 这类后缀即触发。
 
 **正确姿势**:发版版本号**只用平铺 semver 补丁位推进**(0.7.17 → 0.7.18),探针版/试验版也照常占用正式版本号,探针性质写进 commit message 和 changelog 即可。证据链见 [../decisions/changelog.md](../decisions/changelog.md) 0.7.17 条目。
+
+## 16. 宿主只对"入口级"裸导入提供运行时模块——裸 TSX 多文件入口 stage=load 解析失败(0.7.24 真机证伪,0.7.25 定案)
+
+**症状**:0.7.24(移除 peers、全裸 specifier)真机 stage=load 失败,宿主日志报 `Cannot find package '@opentui/solid' imported from ...src\tui.tsx`——footer/右栏全无。而同宿主(v2.0.29)上 OMO-Slim 3.0.1(预编译单文件 bundle、stamp 里没有 @opentui/solid)活体,其裸 `@opentui/solid` 导入能解析。
+
+**取证**(宿主源码 v2.0.29 tag + 本机二进制 strings + 文件系统全链排查):宿主 TUI 启动时经 `packages/tui/src/plugin/runtime-plugin-support.bun.ts` 调 @opentui/solid 的 `ensureRuntimePluginSupport()`——注册 bun 运行时插件:`build.module("opentui:runtime-module:*")` + 逐 specifier 的精确 `onResolve`(`@opentui/solid`、`@opentui/solid/jsx-runtime`、`solid-js` 等 → 宿主实例)+ 对 node_modules ESM 的 prescan 精确路径改写 loader(`nodeModulesRuntimeSpecifiers:true`);另有独立 babel solid transform(仅处理非-node_modules 源文件)。文件系统反证:OMO stamp、npm 根、`~/.cache/opencode`、宿主数据目录、家目录 node_modules——**全链不存在可解析的 @opentui/solid 磁盘拷贝**,OMO 的导入只能由上述运行时机制接管。
+
+**根因(机制推演,置信度高)**:入口文件的顶层裸导入会触发 onResolve → 宿主运行时模块(OMO 单文件 bundle 恰是此形态);而**嵌套相对导入链里的裸 specifier 可能走 bun 的 native 加载快路径、不经插件回调**——@opentui/core/runtime-plugin.js 头注释自证"Bun may native-load node_modules ESM without firing onResolve for nested package imports"。我们裸 TSX 入口的 `@opentui/solid` 深藏在 reactive-mount.ts(入口相对导入的第二层),native 解析沿磁盘向上找不到包 → 加载失败。裸 TSX 形态等价于把"多文件相对导入图"强加给一个只对"入口级导入"做接管的运行时。
+
+**正确姿势(0.7.25)**:TUI 入口**预编译为单文件 ESM bundle**(OMO tui2.js 同构):`npm run build:tui` → `dist/tui.js`(esbuild `--bundle --format=esm`,`@opencode/*`/`@opentui/*`/`solid-js` external),`exports["./tui"]` 指向 dist;src 保留为源码与 UT 对象。单文件让全部裸导入提升到入口顶层 = OMO 的实证活体形态。dist/tui.js 随仓库提交(git 安装以仓库文件为准);verify-install 增加 dist 树镜像与 tui export 目标存在性检查。0.7.24 的无 createRoot ambient reactiveElement mount 与全裸 specifier 导入保持不变——预编译只改投递形态,不改运行时姿势。

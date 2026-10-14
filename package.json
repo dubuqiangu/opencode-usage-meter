@@ -1,14 +1,15 @@
 {
   "name": "opencode-usage-meter",
-  "version": "0.7.24",
+  "version": "0.7.25",
   "type": "module",
   "scripts": {
-    "test": "node --import ./test/test-loader.mjs --test"
+    "test": "node --import ./test/test-loader.mjs --test",
+    "build:tui": "npx esbuild src/tui.tsx --bundle --format=esm --platform=node --target=es2022 --jsx=automatic --external:@opencode/* --external:@opentui/* --external:solid-js --external:solid-js/* --outfile=dist/tui.js"
   },
   "description": "OpenCode V2 TUI plugin: usage meter — live elapsed-time, tok/s throughput, daily token usage, and cache hit rate in the prompt footer, plus /usage-full stats panel",
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./src/tui.tsx"
+    "./tui": "./dist/tui.js"
   },
   "dependencies": {
     "@opencode/plugin": "latest"
