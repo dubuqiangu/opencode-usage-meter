@@ -3,6 +3,7 @@
 // all-time detail tables. Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createSignal } from "solid-js"
 import { fmtNum, fmtUSD, format } from "./format"
+import { dailyHitRatio, sessionHitRatio } from "./hit-rate"
 import { liveRate } from "./rate-model"
 import { TOTAL_SCOPE_LABELS } from "./settings"
 import type { CalibrationApi } from "./calibration"
@@ -160,8 +161,8 @@ export function createPanelContent(deps: {
         const reasoning = agg.reasoning ?? 0
         const read = agg.cache?.read ?? 0
         const write = agg.cache?.write ?? 0
-        const prompt = input + read + write
-        const hit = prompt > 0 ? Math.round((read / prompt) * 100) : undefined
+        const hitRatio = sessionHitRatio(read, input, write)
+        const hit = hitRatio !== undefined ? Math.round(hitRatio * 100) : undefined
         const cost = fmtUSD(session?.cost ?? 0)
         lines.push("── 本会话累计 ──")
         lines.push(`  ${turns}${partial ? "+" : ""} 轮 · in ${fmtNum(input)}  out ${fmtNum(output)}  reasoning ${fmtNum(reasoning)}`)
@@ -191,8 +192,8 @@ export function createPanelContent(deps: {
           }
           // Hide the block while no child has reported any usage yet.
           if (anyTok) {
-            const cp = ci + cc + cw
-            const chit = cp > 0 ? Math.round((cc / cp) * 100) : undefined
+            const childrenHitRatio = sessionHitRatio(cc, ci, cw)
+            const chit = childrenHitRatio !== undefined ? Math.round(childrenHitRatio * 100) : undefined
             const cCost = fmtUSD(ccost)
             lines.push("")
             lines.push(`── 子代理(${children.length} 个会话) ──`)
@@ -266,10 +267,8 @@ export function createPanelContent(deps: {
     // Cache hit rate: share of the model's input context served from cache.
     // Undefined when there is no input context at all (nothing to rate).
     const cacheHit = (tk: any): number | undefined => {
-      const read = tk?.cache?.read ?? 0
-      const input = tk?.input ?? 0
-      const denom = read + input
-      return denom > 0 ? Math.round((read / denom) * 100) : undefined
+      const ratio = dailyHitRatio(tk?.cache?.read ?? 0, tk?.input ?? 0)
+      return ratio !== undefined ? Math.round(ratio * 100) : undefined
     }
 
     const modelRow = (u: any): string => {

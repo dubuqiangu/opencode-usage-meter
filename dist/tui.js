@@ -623,6 +623,18 @@ function createSessionMetrics(deps) {
 
 // src/panel-content.ts
 import { createSignal as createSignal2 } from "solid-js";
+
+// src/hit-rate.ts
+var sessionHitRatio = (cacheRead, input, cacheWrite) => {
+  const denominator = input + cacheRead + cacheWrite;
+  return denominator > 0 ? cacheRead / denominator : void 0;
+};
+var dailyHitRatio = (cacheRead, input) => {
+  const denominator = cacheRead + input;
+  return denominator > 0 ? cacheRead / denominator : void 0;
+};
+
+// src/panel-content.ts
 var PANEL_NAME = "usage-meter.stats";
 function createPanelContent(deps) {
   const { context, now } = deps;
@@ -721,8 +733,8 @@ function createPanelContent(deps) {
         const reasoning = agg.reasoning ?? 0;
         const read = agg.cache?.read ?? 0;
         const write = agg.cache?.write ?? 0;
-        const prompt = input + read + write;
-        const hit = prompt > 0 ? Math.round(read / prompt * 100) : void 0;
+        const hitRatio = sessionHitRatio(read, input, write);
+        const hit = hitRatio !== void 0 ? Math.round(hitRatio * 100) : void 0;
         const cost = fmtUSD(session?.cost ?? 0);
         lines.push("\u2500\u2500 \u672C\u4F1A\u8BDD\u7D2F\u8BA1 \u2500\u2500");
         lines.push(`  ${turns}${partial ? "+" : ""} \u8F6E \xB7 in ${fmtNum(input)}  out ${fmtNum(output)}  reasoning ${fmtNum(reasoning)}`);
@@ -751,8 +763,8 @@ function createPanelContent(deps) {
             ccost += c?.cost ?? 0;
           }
           if (anyTok) {
-            const cp = ci + cc + cw;
-            const chit = cp > 0 ? Math.round(cc / cp * 100) : void 0;
+            const childrenHitRatio = sessionHitRatio(cc, ci, cw);
+            const chit = childrenHitRatio !== void 0 ? Math.round(childrenHitRatio * 100) : void 0;
             const cCost = fmtUSD(ccost);
             lines.push("");
             lines.push(`\u2500\u2500 \u5B50\u4EE3\u7406(${children.length} \u4E2A\u4F1A\u8BDD) \u2500\u2500`);
@@ -817,10 +829,8 @@ function createPanelContent(deps) {
     const all = st?.all;
     const lines = [];
     const cacheHit = (tk2) => {
-      const read = tk2?.cache?.read ?? 0;
-      const input = tk2?.input ?? 0;
-      const denom = read + input;
-      return denom > 0 ? Math.round(read / denom * 100) : void 0;
+      const ratio = dailyHitRatio(tk2?.cache?.read ?? 0, tk2?.input ?? 0);
+      return ratio !== void 0 ? Math.round(ratio * 100) : void 0;
     };
     const modelRow = (u) => {
       const name = `${u.model?.providerID ?? "?"}/${u.model?.id ?? "?"}`.slice(0, 36);
@@ -1146,7 +1156,7 @@ function createSidebarMetrics(deps) {
     const blockState = createMemo3(() => {
       const currentTime = now();
       const persistedCollapsed = statsBlockCollapsed();
-      const collapsed = Date.now() - lastLocalFlipAt < 2e3 ? isCollapsed() : persistedCollapsed;
+      const collapsed = currentTime - lastLocalFlipAt < 2e3 ? isCollapsed() : persistedCollapsed;
       let metricText = null;
       if (!collapsed) {
         let running = false;
@@ -1190,17 +1200,19 @@ function createSidebarMetrics(deps) {
         if (hitScope === "session") {
           try {
             const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens;
-            const cacheRead = sessionTokens?.cache?.read ?? 0;
-            const denominator = (sessionTokens?.input ?? 0) + cacheRead + (sessionTokens?.cache?.write ?? 0);
-            if (denominator > 0)
-              metricLines.push(`\u{1F3AF} ${(cacheRead / denominator * 100).toFixed(1)}% (session)`);
+            const sessionRatio = sessionHitRatio(
+              sessionTokens?.cache?.read ?? 0,
+              sessionTokens?.input ?? 0,
+              sessionTokens?.cache?.write ?? 0
+            );
+            if (sessionRatio !== void 0)
+              metricLines.push(`\u{1F3AF} ${(sessionRatio * 100).toFixed(1)}% (session)`);
           } catch {
           }
         } else if (stats) {
-          const cacheRead = stats?.tokens?.cache?.read ?? 0;
-          const denominator = cacheRead + (stats?.tokens?.input ?? 0);
-          if (denominator > 0)
-            metricLines.push(`\u{1F3AF} ${(cacheRead / denominator * 100).toFixed(1)}% (today)`);
+          const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0);
+          if (dailyRatio !== void 0)
+            metricLines.push(`\u{1F3AF} ${(dailyRatio * 100).toFixed(1)}% (today)`);
         }
         metricText = metricLines.length > 0 ? metricLines.join("\n") : null;
       }
@@ -1301,9 +1313,12 @@ function createFooterStatus(deps) {
       if (showHitInFooter && hitScope === "session") {
         try {
           const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens;
-          const cacheRead = sessionTokens?.cache?.read ?? 0;
-          const denominator = (sessionTokens?.input ?? 0) + cacheRead + (sessionTokens?.cache?.write ?? 0);
-          if (denominator > 0) parts.push(`hit\xB7s ${(cacheRead / denominator * 100).toFixed(1)}%`);
+          const sessionRatio = sessionHitRatio(
+            sessionTokens?.cache?.read ?? 0,
+            sessionTokens?.input ?? 0,
+            sessionTokens?.cache?.write ?? 0
+          );
+          if (sessionRatio !== void 0) parts.push(`hit\xB7s ${(sessionRatio * 100).toFixed(1)}%`);
         } catch {
         }
       }
@@ -1311,9 +1326,8 @@ function createFooterStatus(deps) {
       if (stats) {
         const todayTokens = stats?.tokens;
         if (showHitInFooter && hitScope !== "session") {
-          const cacheRead = todayTokens?.cache?.read ?? 0;
-          const denominator = cacheRead + (todayTokens?.input ?? 0);
-          if (denominator > 0) parts.push(`hit ${(cacheRead / denominator * 100).toFixed(1)}%`);
+          const dailyRatio = dailyHitRatio(todayTokens?.cache?.read ?? 0, todayTokens?.input ?? 0);
+          if (dailyRatio !== void 0) parts.push(`hit ${(dailyRatio * 100).toFixed(1)}%`);
         }
       }
       return parts.length > 0 ? parts.join("   ") : null;

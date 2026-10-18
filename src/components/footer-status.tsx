@@ -13,6 +13,7 @@
 // stats signals drive the re-render directly.
 import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
+import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
@@ -129,20 +130,22 @@ export function createFooterStatus(deps: {
       if (showHitInFooter && hitScope === "session") {
         try {
           const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens
-          const cacheRead = sessionTokens?.cache?.read ?? 0
-          const denominator = (sessionTokens?.input ?? 0) + cacheRead + (sessionTokens?.cache?.write ?? 0)
+          const sessionRatio = sessionHitRatio(
+            sessionTokens?.cache?.read ?? 0,
+            sessionTokens?.input ?? 0,
+            sessionTokens?.cache?.write ?? 0,
+          )
           // One decimal: the daily/session ratio is naturally stable, so an
           // integer percent looks frozen while the underlying counts move.
-          if (denominator > 0) parts.push(`hit·s ${((cacheRead / denominator) * 100).toFixed(1)}%`)
+          if (sessionRatio !== undefined) parts.push(`hit·s ${(sessionRatio * 100).toFixed(1)}%`)
         } catch {}
       }
       const stats = todayStats()
       if (stats) {
         const todayTokens = stats?.tokens
         if (showHitInFooter && hitScope !== "session") {
-          const cacheRead = todayTokens?.cache?.read ?? 0
-          const denominator = cacheRead + (todayTokens?.input ?? 0)
-          if (denominator > 0) parts.push(`hit ${((cacheRead / denominator) * 100).toFixed(1)}%`)
+          const dailyRatio = dailyHitRatio(todayTokens?.cache?.read ?? 0, todayTokens?.input ?? 0)
+          if (dailyRatio !== undefined) parts.push(`hit ${(dailyRatio * 100).toFixed(1)}%`)
         }
       }
       return parts.length > 0 ? parts.join("   ") : null

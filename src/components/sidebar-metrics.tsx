@@ -31,6 +31,7 @@
 // for a host-driven repaint (e.g. a session switch).
 import { createMemo, createSignal } from "solid-js"
 import { fmtNum, format } from "../format"
+import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
@@ -98,10 +99,11 @@ export function createSidebarMetrics(deps: {
       const currentTime = now()
       // v0.7.12: the persisted reader wins outside the 2s local-flip window
       // (see the comment above the signal); inside it the synchronous local
-      // signal hides the store write's async landing. Both clocks are within
-      // 500ms of each other, so Date.now() vs the tick value is equivalent.
+      // signal hides the store write's async landing. v0.7.27: the flip
+      // window is measured against the single tick clock (the value above)
+      // instead of a second Date.now() source.
       const persistedCollapsed = statsBlockCollapsed()
-      const collapsed = Date.now() - lastLocalFlipAt < 2_000 ? isCollapsed() : persistedCollapsed
+      const collapsed = currentTime - lastLocalFlipAt < 2_000 ? isCollapsed() : persistedCollapsed
       let metricText: string | null = null
       if (!collapsed) {
         // 0.7.21: wrap the host status() read — see footer-status.tsx; a
@@ -160,17 +162,18 @@ export function createSidebarMetrics(deps: {
         if (hitScope === "session") {
           try {
             const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens
-            const cacheRead = sessionTokens?.cache?.read ?? 0
-            const denominator =
-              (sessionTokens?.input ?? 0) + cacheRead + (sessionTokens?.cache?.write ?? 0)
-            if (denominator > 0)
-              metricLines.push(`🎯 ${((cacheRead / denominator) * 100).toFixed(1)}% (session)`)
+            const sessionRatio = sessionHitRatio(
+              sessionTokens?.cache?.read ?? 0,
+              sessionTokens?.input ?? 0,
+              sessionTokens?.cache?.write ?? 0,
+            )
+            if (sessionRatio !== undefined)
+              metricLines.push(`🎯 ${(sessionRatio * 100).toFixed(1)}% (session)`)
           } catch {}
         } else if (stats) {
-          const cacheRead = stats?.tokens?.cache?.read ?? 0
-          const denominator = cacheRead + (stats?.tokens?.input ?? 0)
-          if (denominator > 0)
-            metricLines.push(`🎯 ${((cacheRead / denominator) * 100).toFixed(1)}% (today)`)
+          const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0)
+          if (dailyRatio !== undefined)
+            metricLines.push(`🎯 ${(dailyRatio * 100).toFixed(1)}% (today)`)
         }
         metricText = metricLines.length > 0 ? metricLines.join("\n") : null
       }
