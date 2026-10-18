@@ -8,7 +8,7 @@
 | 一轮多消息/多步 | 按 `messageID` 分别记账,`turnTotal` 求和 |
 | 精确值按步计数(非累计) | `out > 当前估算` 门槛拒绝倒退的读数 |
 | 双事件族同时到达 | `sessionVocab` 锁,先到者胜,后者忽略 |
-| 工具执行间隙(无流) | 4s 新鲜度门槛自动隐藏速率,恢复流式后重现 |
+| 工具执行间隙(无流) | 4s 新鲜度门槛自动隐藏速率,恢复流式后重现(即"运行中 ⚡ 短暂消失"的候选 A,待取证项见下文 已知限制 末尾) |
 | 子代理 session | 事件带各自 sessionID,状态天然隔离;查看子 session 时 footer 显示其自身速率 |
 | 订阅失败(未知事件名等) | `listen()` try/catch,单个订阅失败不影响其余功能 |
 | 插件卸载/热重载 | 清理函数:clearInterval + slot 注销(四处一致 try/catch,0.7.12 起 footer slot 不再是裸调用例外)+ 全部退订 + 各 factory release(0.7.12 起 sessionMetrics 也入列,清 1.5s 延迟重算定时器) |
@@ -34,6 +34,16 @@
 - ctx% 模型档位(平台级):同 id 多 context-tier 变体时可能取错档位;服务端未暴露 per-request 实际档位,原生面板精度等同,不做修
 - `syncedChildren` 终身增长(0.7.6 审视确认,changelog 曾提及、此处补记):`/usage-full` 会话累计块每次渲染都会把新发现的子会话 id 记入模块级 Set 并触发一次性 `session.sync()`;Set 随插件实例生命周期只增不减。纯防重集合、体量为会话数量级、零宿主句柄,不做修
 - `sessionModels` Map 终身增长(0.7.26 审视确认,与 syncedChildren 同性质):calibration 的会话→模型记录随插件实例生命周期只增不减,体量为会话数量级、零宿主句柄,不做修
+
+**待取证观察:运行中 ⚡ 短暂消失(0.7.28 报告,尚未复现)**:
+
+- **现象**:真机报告——会话运行中 footer 的 ⚡ 短暂消失,而 **⏱ 仍在跳**(即未退化为 ⏳/🏁/整段消失)。涉及三个重工具调用的长会话(db-insight 插件开发与三版发布、更新 AI providers 供应商模型、opencode-bridge 插件开发完善);报告后自行恢复,受控条件下未复现
+- **候选 A(设计如此,初步倾向)**:`rate-model.ts` 的 **4s 样本新鲜度门**——⚡ 只在 `running && started` 且 `liveRate()` 有值时渲染;样本仅由流式 delta 与 step 结束产生,工具执行、长 bash、子代理等待期间无 delta,超过 4s 即返回 undefined(见上表「工具执行间隙」行 + `docs/features/footer.md`)。三个会话恰是"重工具调用 + 多轮",是该门触发最密的负载:一轮 5 次 6–20s 工具 → 5 段空窗,每段约 `gap−4s` 秒;恢复后还需凑齐 2 个样本(≈0.5–1s)
+- **候选 B(可能是真缺陷)**:宿主/provider 在某阶段(如 reasoning)不逐块广播 delta → 该轮近乎全程无样本 → ⚡ 接近整轮不显示(量级远大于 A)
+- **已排除**:`status()` 抛错或短暂返回非 running 的路径——它会让 **⏱ 一起消失**(变 🏁/⏳/整段 null),与"仅 ⚡ 消失"不符
+- **日志侧不可辨**:宿主日志只记 `model.updated`/`provider.updated`/`command.updated`/`agent.updated`/`config.updated` 五类(全量 17118 事件),**不含任何流式事件遥测**,无法测量样本间隔 → 只能靠运行时探针
+- **探针(0.7.28,临时)**:`src/tok-probe.ts` 双通道写 `os.tmpdir()/usage-meter-tok-probe.log` + `console.error`,记录 ① delta 每秒到达速率与 execution/step 生命周期事件(用于判定 B,并看 `execution.succeeded` 是否按 step 下发)② ⚡ 缺失原因(`samples<2` / `stale>4s` / `no-start` / `not-running` / `gate(dt-or-zero)`,含 `status()` 原始值、样本数、最后样本年龄,降级期 2s 心跳以量化时长)。**纯旁路,运行时行为零变化**;但它是本项目**唯一**的本地文件写(与"零采集零存储"红线的一处有意例外),取证完成或用户要求时应**整块回滚**(`src/tok-probe.ts` + tui.tsx/footer-status.tsx 两处 import 与调用 + 版本回落)
+- **后续口径**:若复现且探针显示 `stale>4s` 反复出现 → 主因 A(设计契约,问题变为"要不要改 4s 契约");若显示整轮 `samples<2` 或 `deltas/s` 长期为 0 → 主因 B(按 bug 处理)。修复候选(0.7.27 oracle 审视):**F6** 去零增长样本(真 bug 级、零可感知变化)、**F1** 回合边界不清样本(需 B 侧证据)、**设计契约**放宽 4s 门或显示 `⚡ —` 占位(需用户拍板)
 
 **宿主依赖与生命周期**:
 
