@@ -14,6 +14,8 @@
 import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
 import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
+// v0.7.28 TEMPORARY probe — remove with src/tok-probe.ts.
+import { probeGate } from "../tok-probe"
 import { liveRate } from "../rate-model"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
@@ -77,11 +79,33 @@ export function createFooterStatus(deps: {
       // the same reactive instance as the reconciler's effects, so it would
       // poison the render chain. Degrade to "not running" instead.
       let running = false
+      let rawStatus: any = undefined
       try {
-        running = context.data?.session?.status?.(sessionID) === "running"
-      } catch {}
+        rawStatus = context.data?.session?.status?.(sessionID)
+        running = rawStatus === "running"
+      } catch {
+        rawStatus = "throw"
+      }
       const started = starts.get(sessionID)
       const last = lastDurations.get(sessionID)
+      // v0.7.28 TEMPORARY probe — remove with src/tok-probe.ts.
+      {
+        const probeRate = rates.get(sessionID)
+        const probeSamples = probeRate?.samples ?? []
+        const probeLastSample = probeSamples[probeSamples.length - 1]
+        probeGate({
+          sessionID,
+          running,
+          rawStatus,
+          hasStarted: started !== undefined,
+          sampleCount: probeSamples.length,
+          lastSampleAgeMs:
+            probeLastSample !== undefined
+              ? currentTime - probeLastSample.t
+              : Number.POSITIVE_INFINITY,
+          computedRate: probeRate ? liveRate(probeRate, currentTime) : undefined,
+        })
+      }
 
       const parts: string[] = []
       if (running && started !== undefined) {
