@@ -105,7 +105,7 @@ export function createSettings(context: any): SettingsApi {
     try {
       void updateSettingsStore((draft: any) => {
         draft[flagKey] = !currentValue
-      })
+      }).catch((error: any) => console.error(`[usage-meter] failed to persist ${flagKey}`, error))
     } catch {}
   }
 
@@ -118,7 +118,7 @@ export function createSettings(context: any): SettingsApi {
       const nextHitScope = hitScopeEnabled() === "session" ? "today" : "session"
       void updateSettingsStore((draft: any) => {
         draft.hitScope = nextHitScope
-      })
+      }).catch((error: any) => console.error("[usage-meter] failed to persist hitScope", error))
     } catch {}
   }
 
@@ -132,7 +132,7 @@ export function createSettings(context: any): SettingsApi {
       const cycledScope = nextTotalScope(totalScopeEnabled())
       void updateSettingsStore((draft: any) => {
         draft.totalScope = cycledScope
-      })
+      }).catch((error: any) => console.error("[usage-meter] failed to persist totalScope", error))
     } catch {}
   }
 

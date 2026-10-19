@@ -168,7 +168,7 @@ function createSettings(context) {
     try {
       void updateSettingsStore((draft) => {
         draft[flagKey] = !currentValue;
-      });
+      }).catch((error) => console.error(`[usage-meter] failed to persist ${flagKey}`, error));
     } catch {
     }
   };
@@ -181,7 +181,7 @@ function createSettings(context) {
       const nextHitScope = hitScopeEnabled() === "session" ? "today" : "session";
       void updateSettingsStore((draft) => {
         draft.hitScope = nextHitScope;
-      });
+      }).catch((error) => console.error("[usage-meter] failed to persist hitScope", error));
     } catch {
     }
   };
@@ -194,7 +194,7 @@ function createSettings(context) {
       const cycledScope = nextTotalScope(totalScopeEnabled());
       void updateSettingsStore((draft) => {
         draft.totalScope = cycledScope;
-      });
+      }).catch((error) => console.error("[usage-meter] failed to persist totalScope", error));
     } catch {
     }
   };
