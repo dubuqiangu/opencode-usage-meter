@@ -51,7 +51,7 @@ var probeGate = (fields) => {
 };
 
 // src/tui.tsx
-import { createSignal as createSignal4 } from "solid-js";
+import { createSignal as createSignal3 } from "solid-js";
 
 // src/calibration.ts
 function createCalibration(context) {
@@ -1184,7 +1184,7 @@ function createSettingsDialog(deps) {
 }
 
 // src/components/sidebar-metrics.tsx
-import { createMemo as createMemo3, createSignal as createSignal3 } from "solid-js";
+import { createMemo as createMemo3 } from "solid-js";
 import { jsx as jsx3, jsxs } from "@opentui/solid/jsx-runtime";
 function createSidebarMetrics(deps) {
   const { context, now } = deps;
@@ -1202,12 +1202,9 @@ function createSidebarMetrics(deps) {
     if (!sidebarMetricsEnabled()) return null;
     const sessionID = props.sessionID;
     backfillLastTurn(sessionID);
-    const [isCollapsed, setIsCollapsed] = createSignal3(statsBlockCollapsed());
-    let lastLocalFlipAt = 0;
     const blockState = createMemo3(() => {
       const currentTime = now();
-      const persistedCollapsed = statsBlockCollapsed();
-      const collapsed = currentTime - lastLocalFlipAt < 2e3 ? isCollapsed() : persistedCollapsed;
+      const collapsed = statsBlockCollapsed();
       let metricText = null;
       if (!collapsed) {
         let running = false;
@@ -1280,16 +1277,7 @@ function createSidebarMetrics(deps) {
           flexDirection: "row",
           width: "100%",
           onMouseUp: () => {
-            const wasCollapsed = Date.now() - lastLocalFlipAt < 2e3 ? isCollapsed() : statsBlockCollapsed();
-            setIsCollapsed(!wasCollapsed);
-            lastLocalFlipAt = Date.now();
-            toggleSettingsFlag("statsBlockCollapsed", wasCollapsed);
-            try {
-              if (typeof context.renderer?.requestRender === "function") {
-                context.renderer.requestRender();
-              }
-            } catch {
-            }
+            toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed());
           },
           children: /* @__PURE__ */ jsx3("text", { fg: base, selectable: false, children: () => {
             return `${blockState().collapsed ? "\u25B8" : "\u25BC"} Stats`;
@@ -1442,7 +1430,7 @@ import { jsx as jsx5 } from "@opentui/solid/jsx-runtime";
 var tui_default = Plugin.define({
   id: "usage-meter",
   setup(context) {
-    const [now, setNow] = createSignal4(Date.now());
+    const [now, setNow] = createSignal3(Date.now());
     const calibration = createCalibration(context);
     const settings = createSettings(context);
     const statsSource = createStatsSource(context, settings.totalScopeEnabled);

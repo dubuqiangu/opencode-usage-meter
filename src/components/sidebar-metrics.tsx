@@ -23,13 +23,13 @@
 // core node identically. The collapsed state persists in the settings
 // store (statsBlockCollapsed) and survives restarts.
 //
-// v0.7.11 real-time repaint: the host TUI paints on demand — a reactive
-// tree update alone never refreshes the screen; someone must call
-// renderer.requestRender(). The 500ms tick in tui.tsx requests a repaint
-// on every fire, and the header click flips a local collapsed signal and
-// requests one immediately, so ▼/▸ toggles instantly instead of waiting
-// for a host-driven repaint (e.g. a session switch).
-import { createMemo, createSignal } from "solid-js"
+// v0.7.30: repaint cadence is the 500ms tick alone. The tick in tui.tsx
+// calls requestRender() on every fire, so a store mutation lands on screen
+// within a tick. The 0.7.11 header-click shortcut (local signal + an extra
+// renderer.requestRender()) was removed: the official sidebar plugins
+// (packages/tui/src/feature-plugins/sidebar/*) never touch `context.renderer`
+// — they rely on the reactive store plus the host's paint cycle.
+import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
 import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
@@ -73,37 +73,23 @@ export function createSidebarMetrics(deps: {
     // history yet — replay the last turn from synced records once (guarded,
     // so repeated host re-mounts stay no-ops).
     backfillLastTurn(sessionID)
-    // v0.7.11: local mirror of the persisted collapsed flag. The click
-    // flips this signal synchronously (instant memo re-run + repaint),
-    // then persists through the settings store — the store write alone
-    // may not be reactive, and the host only repaints on request anyway.
-    // v0.7.12: the memo no longer trusts the local signal exclusively —
-    // that made the "mirrors the persisted flag" claim hollow, since a
-    // collapse flipped in another TUI instance never showed up here. The
-    // memo re-reads the persisted reader and only defers to the local
-    // flip for a 2s window after a click (lastLocalFlipAt), which absorbs
-    // the store write's async landing without bouncing the header back;
-    // afterwards the persisted value wins, so cross-instance sync recovers
-    // within the next 500ms tick.
-    const [isCollapsed, setIsCollapsed] = createSignal(statsBlockCollapsed())
-    let lastLocalFlipAt = 0
+    // v0.7.30: single source of truth for the collapsed state is the
+    // persisted settings store. `context.storage.store` returns a
+    // solid-js/store `Store` (official contract: "Durable JSON state ...
+    // stays live-synced across running TUI instances"), so reading
+    // `statsBlockCollapsed()` inside the memo registers a dependency and the
+    // host's mutation re-runs it — no local mirror and no time window are
+    // needed to bridge the async write. The old `lastLocalFlipAt` 2s window
+    // (0.7.11-0.7.29) shadowed another instance's flip for two seconds and
+    // forced the click handler to duplicate the memo's resolution rule.
 
     // v0.7.8/0.7.9: every dynamic read (now(), session status, stats
     // signals, settings signals, collapsed flag) lives inside the memo, so
     // the interpolations below re-render on each 500ms tick, on every stats
-    // refresh, and on header clicks. `now()` is read unconditionally — even
-    // while collapsed — so the 500ms tick keeps re-evaluating the memo and a
-    // collapsed<->expanded flip is picked up within 500ms even if the host
-    // storage store turns out not to be reactive.
+    // refresh, and when the store mutation lands contained in that tick.
     const blockState = createMemo(() => {
       const currentTime = now()
-      // v0.7.12: the persisted reader wins outside the 2s local-flip window
-      // (see the comment above the signal); inside it the synchronous local
-      // signal hides the store write's async landing. v0.7.27: the flip
-      // window is measured against the single tick clock (the value above)
-      // instead of a second Date.now() source.
-      const persistedCollapsed = statsBlockCollapsed()
-      const collapsed = currentTime - lastLocalFlipAt < 2_000 ? isCollapsed() : persistedCollapsed
+      const collapsed = statsBlockCollapsed()
       let metricText: string | null = null
       if (!collapsed) {
         // 0.7.21: wrap the host status() read — see footer-status.tsx; a
@@ -194,28 +180,11 @@ export function createSidebarMetrics(deps: {
           flexDirection="row"
           width="100%"
           onMouseUp={() => {
-            // v0.7.13: reconcile with the same rule the memo uses — the
-            // DISPLAYED state may have been taken over by the persisted
-            // value (another instance flipped it, or the 2s local window
-            // expired), so the click must flip what the user sees, not the
-            // possibly stale local signal; otherwise a click after a
-            // cross-instance takeover would write the store value back
-            // unchanged and the header would appear dead.
-            const wasCollapsed =
-              Date.now() - lastLocalFlipAt < 2_000 ? isCollapsed() : statsBlockCollapsed()
-            setIsCollapsed(!wasCollapsed)
-            // Open the 2s window where the local flip shadows the persisted
-            // value (the store write below may land asynchronously).
-            lastLocalFlipAt = Date.now()
-            toggleSettingsFlag("statsBlockCollapsed", wasCollapsed)
-            // Instant feedback: the signal flip re-runs the memo now, and
-            // the explicit repaint request makes it visible immediately
-            // instead of waiting for the next 500ms tick.
-            try {
-              if (typeof context.renderer?.requestRender === "function") {
-                context.renderer.requestRender()
-              }
-            } catch {}
+            // v0.7.30: the displayed state IS the persisted store value, so
+            // flipping it needs no reconciliation with a local mirror. The
+            // store mutation re-runs the memo, and the 500ms tick requests a
+            // repaint, so the caret and metrics follow within a tick.
+            toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed())
           }}
         >
           {/* v0.7.10: the label text opts out of text selection
