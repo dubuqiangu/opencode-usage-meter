@@ -25,8 +25,6 @@
 //   session.step.ended / session.step.failed -> exact tokens { tokens: { output, ... } }
 //   message.part.delta / message.updated kept as legacy fallbacks (guarded).
 import { Plugin } from "@opencode/plugin/tui"
-// v0.7.28 TEMPORARY probe — remove with src/tok-probe.ts.
-import { probeEvent } from "./tok-probe"
 // 0.7.24: bare "solid-js" — the host provides solid-js and @opentui/* to
 // plugin TUI code as externalized modules (OMO-Slim ships with none in its
 // stamp and imports bare specifiers). Declaring them as peerDependencies
@@ -133,13 +131,7 @@ export default Plugin.define({
     const subs: Array<() => void> = []
     const listen = (type: string, handler: (event: any) => void) => {
       try {
-        // v0.7.28 TEMPORARY probe — remove with src/tok-probe.ts.
-        subs.push(
-          context.data.on(type, (event: any) => {
-            probeEvent(type)
-            handler(event)
-          }),
-        )
+        subs.push(context.data.on(type, handler))
       } catch (error) {
         console.error(`[usage-meter] ${type} subscription failed:`, error)
       }

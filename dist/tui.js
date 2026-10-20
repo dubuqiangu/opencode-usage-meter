@@ -1,56 +1,5 @@
 // src/tui.tsx
 import { Plugin } from "@opencode/plugin/tui";
-
-// src/tok-probe.ts
-import { appendFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-var TOK_PROBE_PATH = join(tmpdir(), "usage-meter-tok-probe.log");
-var writeProbeLine = (line) => {
-  const stamped = `${(/* @__PURE__ */ new Date()).toISOString()} ${line}`;
-  try {
-    appendFileSync(TOK_PROBE_PATH, `${stamped}
-`);
-  } catch {
-  }
-  try {
-    console.error(`[usage-meter][tok-probe] ${line}`);
-  } catch {
-  }
-};
-var lastGateReason = "";
-var lastGateWriteAt = 0;
-var deltasSinceFlush = 0;
-var deltaWindowStartedAt = Date.now();
-var probeEvent = (type) => {
-  if (type.endsWith(".delta")) {
-    deltasSinceFlush++;
-    const elapsedMs = Date.now() - deltaWindowStartedAt;
-    if (elapsedMs >= 1e3) {
-      writeProbeLine(
-        `deltas/s=${Math.round(deltasSinceFlush * 1e3 / elapsedMs)} last=${type}`
-      );
-      deltasSinceFlush = 0;
-      deltaWindowStartedAt = Date.now();
-    }
-    return;
-  }
-  writeProbeLine(`event ${type}`);
-};
-var probeGate = (fields) => {
-  const reason = !fields.running ? "not-running" : !fields.hasStarted ? "no-start" : fields.sampleCount < 2 ? "samples<2" : fields.lastSampleAgeMs > 4e3 ? "stale>4s" : fields.computedRate === void 0 ? "gate(dt-or-zero)" : "ok";
-  const now = Date.now();
-  if (reason === lastGateReason) {
-    if (reason === "ok" || now - lastGateWriteAt < 2e3) return;
-  }
-  lastGateReason = reason;
-  lastGateWriteAt = now;
-  writeProbeLine(
-    `gate reason=${reason} sid=\u2026${String(fields.sessionID).slice(-6)} status=${String(fields.rawStatus)} running=${fields.running ? 1 : 0} started=${fields.hasStarted ? 1 : 0} samples=${fields.sampleCount} lastAgeMs=${Number.isFinite(fields.lastSampleAgeMs) ? Math.round(fields.lastSampleAgeMs) : "inf"} rate=${fields.computedRate ?? "-"}`
-  );
-};
-
-// src/tui.tsx
 import { createSignal as createSignal3 } from "solid-js";
 
 // src/calibration.ts
@@ -1331,29 +1280,12 @@ function createFooterStatus(deps) {
     const statusText = createMemo4(() => {
       const currentTime = now();
       let running = false;
-      let rawStatus = void 0;
       try {
-        rawStatus = context.data?.session?.status?.(sessionID);
-        running = rawStatus === "running";
+        running = context.data?.session?.status?.(sessionID) === "running";
       } catch {
-        rawStatus = "throw";
       }
       const started = starts.get(sessionID);
       const last = lastDurations.get(sessionID);
-      {
-        const probeRate = rates.get(sessionID);
-        const probeSamples = probeRate?.samples ?? [];
-        const probeLastSample = probeSamples[probeSamples.length - 1];
-        probeGate({
-          sessionID,
-          running,
-          rawStatus,
-          hasStarted: started !== void 0,
-          sampleCount: probeSamples.length,
-          lastSampleAgeMs: probeLastSample !== void 0 ? currentTime - probeLastSample.t : Number.POSITIVE_INFINITY,
-          computedRate: probeRate ? liveRate(probeRate, currentTime) : void 0
-        });
-      }
       const parts = [];
       if (running && started !== void 0) {
         parts.push(`\u23F1 ${format(currentTime - started)}`);
@@ -1507,12 +1439,7 @@ var tui_default = Plugin.define({
     const subs = [];
     const listen = (type, handler) => {
       try {
-        subs.push(
-          context.data.on(type, (event) => {
-            probeEvent(type);
-            handler(event);
-          })
-        );
+        subs.push(context.data.on(type, handler));
       } catch (error) {
         console.error(`[usage-meter] ${type} subscription failed:`, error);
       }

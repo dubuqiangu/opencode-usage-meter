@@ -42,7 +42,7 @@
 - **候选 B(可能是真缺陷)**:宿主/provider 在某阶段(如 reasoning)不逐块广播 delta → 该轮近乎全程无样本 → ⚡ 接近整轮不显示(量级远大于 A)
 - **已排除**:`status()` 抛错或短暂返回非 running 的路径——它会让 **⏱ 一起消失**(变 🏁/⏳/整段 null),与"仅 ⚡ 消失"不符
 - **日志侧不可辨**:宿主日志只记 `model.updated`/`provider.updated`/`command.updated`/`agent.updated`/`config.updated` 五类(全量 17118 事件),**不含任何流式事件遥测**,无法测量样本间隔 → 只能靠运行时探针
-- **探针(0.7.28,临时)**:`src/tok-probe.ts` 双通道写 `os.tmpdir()/usage-meter-tok-probe.log` + `console.error`,记录 ① delta 每秒到达速率与 execution/step 生命周期事件(用于判定 B,并看 `execution.succeeded` 是否按 step 下发)② ⚡ 缺失原因(`samples<2` / `stale>4s` / `no-start` / `not-running` / `gate(dt-or-zero)`,含 `status()` 原始值、样本数、最后样本年龄,降级期 2s 心跳以量化时长)。**纯旁路,运行时行为零变化**;但它是本项目**唯一**的本地文件写(与"零采集零存储"红线的一处有意例外),取证完成或用户要求时应**整块回滚**(`src/tok-probe.ts` + tui.tsx/footer-status.tsx 两处 import 与调用 + 版本回落)
+- **探针(0.7.28 引入,0.7.34 移除)**:`src/tok-probe.ts` 曾在真机上取证(双通道写 `os.tmpdir()/usage-meter-tok-probe.log` + `console.error`,记录 delta 到达速率、execution/step 生命周期事件、以及 ⚡ 缺失原因与时长)。**从未在真机跑过**(日志文件始终不存在),因此零证据。0.7.34 已整块回滚:`src/tok-probe.ts` 删除、tui.tsx 的 `listen()` 恢复为直接订阅、footer-status memo 去掉 gate tap 与随之无用的 `rawStatus`。① 模块本身是本项目**唯一**的本地文件写,与"零采集零存储"红线冲突,移除后红线恢复完整;② 若日后需要再取证,按本条目描述重新加装,勿长期驻留
 - **后续口径**:若复现且探针显示 `stale>4s` 反复出现 → 主因 A(设计契约,问题变为"要不要改 4s 契约");若显示整轮 `samples<2` 或 `deltas/s` 长期为 0 → 主因 B(按 bug 处理)。修复候选(0.7.27 oracle 审视):**F6** 去零增长样本(真 bug 级、零可感知变化)、**F1** 回合边界不清样本(需 B 侧证据)、**设计契约**放宽 4s 门或显示 `⚡ —` 占位(需用户拍板)
 
 **宿主依赖与生命周期**:
@@ -51,5 +51,5 @@
 - client 方法路径依赖宿主版本 → 防御式候选路径探测,运行时验证
 - 全量查询 `models[]` 可能上百行(探活/失败请求 tokens 为 0)→ 按输出过滤排序,只显示 Top 5
 - **`panel.open` 宿主假设(0.7.12 #6 修复的有意权衡,备查)**:`/usage-full` 按 `ui.panel.open` 返回 **boolean** 语义判断成败(`!== true` 即降级弹窗);若未来宿主改为返回 Promise(异步 open)或其他非 true 对象,命令会误入弹窗降级、出现"面板 + 弹窗双表面"。当前实证宿主(v2.0.21)返回 boolean;如遇异步宿主需改为 await/then 链
-- **`void updateSettingsStore(...)` promise 拒绝未挂 catch(预存模式,备查)**:全项目 settings 写路径均以 `void` 触发且不链 `.catch`——宿主 storage 写失败时该 promise 拒绝会成为 unhandledRejection 噪音(不影响功能,store 写入本就尽力而为);如需消除可统一包一层 catch
+- **`void updateSettingsStore(...)` promise 拒绝未挂 catch(0.7.29 已修)**:0.7.29 起 `settings.ts` 三处 toggle 与 `calibration.ts` 的持久化写均已链 `.catch(console.error)`,宿主 storage 写失败不再产生 unhandledRejection 噪音。本条留作历史记录
 - **热重载生命周期(0.7.3 真机实证)**:`plugin update` 只改磁盘包,运行中宿主仍持旧代码;`/reload` 拆掉旧实例定时器与订阅但不从磁盘重载插件——表现为计时冻结、tok/s 停更。**更新后必须完整重启 TUI**
