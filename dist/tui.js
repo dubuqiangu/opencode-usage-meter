@@ -95,7 +95,9 @@ function createCalibration(context) {
         try {
           void updateCalibStore((draft) => {
             draft[modelKey] = next;
-          });
+          }).catch(
+            (error) => console.error(`[usage-meter] failed to persist calibration for ${modelKey}`, error)
+          );
         } catch {
         }
       }
@@ -167,7 +169,8 @@ function createSettings(context) {
     }
     try {
       void updateSettingsStore((draft) => {
-        draft[flagKey] = !currentValue;
+        const liveValue = draft[flagKey];
+        draft[flagKey] = !(typeof liveValue === "boolean" ? liveValue : currentValue === true);
       }).catch((error) => console.error(`[usage-meter] failed to persist ${flagKey}`, error));
     } catch {
     }
@@ -178,9 +181,9 @@ function createSettings(context) {
       return;
     }
     try {
-      const nextHitScope = hitScopeEnabled() === "session" ? "today" : "session";
       void updateSettingsStore((draft) => {
-        draft.hitScope = nextHitScope;
+        const liveHitScope = draft.hitScope === "session" ? "session" : "today";
+        draft.hitScope = liveHitScope === "session" ? "today" : "session";
       }).catch((error) => console.error("[usage-meter] failed to persist hitScope", error));
     } catch {
     }
@@ -191,9 +194,9 @@ function createSettings(context) {
       return;
     }
     try {
-      const cycledScope = nextTotalScope(totalScopeEnabled());
       void updateSettingsStore((draft) => {
-        draft.totalScope = cycledScope;
+        const liveTotalScope = TOTAL_SCOPES.includes(draft.totalScope) ? draft.totalScope : "today";
+        draft.totalScope = nextTotalScope(liveTotalScope);
       }).catch((error) => console.error("[usage-meter] failed to persist totalScope", error));
     } catch {
     }

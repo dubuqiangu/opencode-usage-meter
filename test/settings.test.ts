@@ -125,3 +125,38 @@ test("nextTotalScope cycles today -> 24h -> 7d -> 30d -> today as a pure functio
   assert.equal(nextTotalScope("7d"), "30d")
   assert.equal(nextTotalScope("30d"), "today")
 })
+
+// v0.7.31 regression: the store write is async, so two clicks can both land
+// before the first commit. Flipping from the caller's snapshot made the second
+// write repeat the first one; the header then looked dead. Toggles must flip
+// from the draft's live value.
+test("two toggles before the first write commits still produce two flips", async () => {
+  const contexts: Array<(fn: (draft: MockStoreState) => void) => void> = []
+  const state: MockStoreState = { statsBlockCollapsed: false }
+  const settings = createSettings({
+    storage: {
+      store: (_name: string, _opts: { initial: unknown }) => [
+        state,
+        (fn: (draft: MockStoreState) => void) => {
+          // Defer the mutation itself, like a real durable store write.
+          contexts.push(fn)
+          return Promise.resolve()
+        },
+      ],
+    },
+  } as any)
+  const snapshot = settings.statsBlockCollapsed()
+  settings.toggleSettingsFlag("statsBlockCollapsed", snapshot)
+  settings.toggleSettingsFlag("statsBlockCollapsed", settings.statsBlockCollapsed())
+  // Neither write has applied yet — both queued drafts must still flip apart.
+  for (const apply of contexts) apply(state)
+  assert.equal(state.statsBlockCollapsed, false)
+  assert.equal(contexts.length, 2)
+})
+
+test("an absent boolean key falls back to the caller's normalized value", () => {
+  const settings = createSettings({ storage: createMockStorage() })
+  // sidebarMetrics is absent from the initial store but reads as true.
+  settings.toggleSettingsFlag("sidebarMetrics", settings.sidebarMetricsEnabled())
+  assert.equal(settings.settingsStore.sidebarMetrics, false)
+})

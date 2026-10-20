@@ -31,7 +31,7 @@ export type SettingsApi = {
   footerHitEnabled: () => boolean
   sidebarMetricsEnabled: () => boolean
   statsBlockCollapsed: () => boolean
-  toggleSettingsFlag: (flagKey: string, currentValue: boolean) => void
+  toggleSettingsFlag: (flagKey: string) => void
   toggleHitScope: () => void
   cycleTotalScope: () => void
   release: () => void
@@ -97,14 +97,26 @@ export function createSettings(context: any): SettingsApi {
   // v0.7.12: an absent update path is an explicit dead end now — log it
   // instead of silently doing nothing (the caller's UI would otherwise
   // believe the toggle worked).
-  const toggleSettingsFlag = (flagKey: string, currentValue: boolean): void => {
+  // v0.7.31: `currentValue` is only the fallback for a key the store has
+  // never held (absent `sidebarMetrics` reads as true while the raw draft
+  // value is `undefined`). A key that IS in the draft flips from its live
+  // value, so rapid repeat clicks never write the same result twice.
+  const toggleSettingsFlag = (flagKey: string, currentValue?: boolean): void => {
     if (!updateSettingsStore) {
       console.error(`[usage-meter] settings store unavailable — cannot toggle ${flagKey}`)
       return
     }
     try {
       void updateSettingsStore((draft: any) => {
-        draft[flagKey] = !currentValue
+        // v0.7.31: flip the value the DRAFT holds (i.e. the store's current
+        // committed value), not the caller's snapshot. The store write is
+        // async, so two clicks landing before the first write commits both
+        // used to flip the same stale `currentValue` and cancel out; the
+        // header then looked dead. Falling back to `currentValue` keeps the
+        // documented default semantics for keys that were never written
+        // (absent `sidebarMetrics` reads as true, so it must flip to false).
+        const liveValue = draft[flagKey]
+        draft[flagKey] = !(typeof liveValue === "boolean" ? liveValue : currentValue === true)
       }).catch((error: any) => console.error(`[usage-meter] failed to persist ${flagKey}`, error))
     } catch {}
   }
@@ -115,9 +127,12 @@ export function createSettings(context: any): SettingsApi {
       return
     }
     try {
-      const nextHitScope = hitScopeEnabled() === "session" ? "today" : "session"
       void updateSettingsStore((draft: any) => {
-        draft.hitScope = nextHitScope
+        // v0.7.31: same live-value rule as toggleSettingsFlag — flip what
+        // the draft currently holds so repeated clicks do not collapse into
+        // one write. An absent/garbage value normalizes to "today".
+        const liveHitScope = draft.hitScope === "session" ? "session" : "today"
+        draft.hitScope = liveHitScope === "session" ? "today" : "session"
       }).catch((error: any) => console.error("[usage-meter] failed to persist hitScope", error))
     } catch {}
   }
@@ -129,9 +144,13 @@ export function createSettings(context: any): SettingsApi {
       return
     }
     try {
-      const cycledScope = nextTotalScope(totalScopeEnabled())
+      // v0.7.31: cycle from the draft's live value (invalid/absent reads as
+      // "today"), not from a snapshot taken before the async write commits.
       void updateSettingsStore((draft: any) => {
-        draft.totalScope = cycledScope
+        const liveTotalScope = TOTAL_SCOPES.includes(draft.totalScope)
+          ? (draft.totalScope as TotalScope)
+          : "today"
+        draft.totalScope = nextTotalScope(liveTotalScope)
       }).catch((error: any) => console.error("[usage-meter] failed to persist totalScope", error))
     } catch {}
   }

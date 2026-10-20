@@ -61,7 +61,9 @@ export function createCalibration(context: any): CalibrationApi {
         try {
           void updateCalibStore((draft: Record<string, number>) => {
             draft[modelKey] = next
-          })
+          }).catch((error: any) =>
+            console.error(`[usage-meter] failed to persist calibration for ${modelKey}`, error),
+          )
         } catch {}
       }
     }
