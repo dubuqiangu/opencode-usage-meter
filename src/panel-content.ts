@@ -174,10 +174,22 @@ export function createPanelContent(deps: {
         // picks the synced values up.
         for (const c of children) {
           if (!c?.id || syncedChildren.has(c.id)) continue
-          syncedChildren.add(c.id)
+          // v0.7.32: mark as synced only AFTER the host sync resolves. The
+          // previous mark-then-call order turned one failed sync into a
+          // permanent "already synced" verdict, so that child's numbers
+          // stayed stale for the rest of the plugin's life. Failures drop the
+          // mark so the next 500ms tick retries.
+          syncedChildren.add(c.id) // in-flight guard: one call per child at a time
           try {
-            void context.data?.session?.sync?.(c.id)
-          } catch {}
+            const syncResult = context.data?.session?.sync?.(c.id)
+            if (syncResult && typeof syncResult.then === "function") {
+              void syncResult.catch(() => {
+                syncedChildren.delete(c.id)
+              })
+            }
+          } catch {
+            syncedChildren.delete(c.id)
+          }
         }
         if (children.length > 0) {
           let ci = 0, co = 0, cr = 0, cc = 0, cw = 0, ccost = 0

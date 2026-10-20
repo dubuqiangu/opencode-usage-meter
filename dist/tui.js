@@ -798,8 +798,14 @@ function createPanelContent(deps) {
           if (!c?.id || syncedChildren.has(c.id)) continue;
           syncedChildren.add(c.id);
           try {
-            void context.data?.session?.sync?.(c.id);
+            const syncResult = context.data?.session?.sync?.(c.id);
+            if (syncResult && typeof syncResult.then === "function") {
+              void syncResult.catch(() => {
+                syncedChildren.delete(c.id);
+              });
+            }
           } catch {
+            syncedChildren.delete(c.id);
           }
         }
         if (children.length > 0) {
