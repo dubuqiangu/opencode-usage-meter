@@ -152,9 +152,20 @@ export function createStatsSource(
   // is in flight; a missing client method is retried indirectly — fetchToday's
   // retry timer keeps firing and the next 60s tick picks the range up once
   // the client is ready.
+  // v0.7.33: a scope switch that arrives while a range fetch is in flight used
+  // to be dropped outright (`if (rangeBusy) return`), so the newly selected
+  // window stayed blank until the next 60s tick. Remember the newest requested
+  // scope instead and run it once the in-flight call settles; only the latest
+  // one is kept (intermediate scopes were never displayed long enough to
+  // matter).
   let rangeBusy = false
+  let pendingRangeScope: TotalScope | undefined
   const fetchRange = async (scope: TotalScope): Promise<void> => {
-    if (scope === "today" || rangeBusy) return
+    if (scope === "today") return
+    if (rangeBusy) {
+      pendingRangeScope = scope
+      return
+    }
     const call = statsCall()
     if (!call) return
     rangeBusy = true
@@ -168,6 +179,9 @@ export function createStatsSource(
     } finally {
       rangeBusy = false
     }
+    const deferredScope = pendingRangeScope
+    pendingRangeScope = undefined
+    if (deferredScope !== undefined) void fetchRange(deferredScope)
   }
 
   // The aggregate for whatever scope the UI currently renders.

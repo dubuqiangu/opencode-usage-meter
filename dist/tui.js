@@ -298,8 +298,13 @@ function createStatsSource(context, totalScopeEnabled = () => "today") {
     }
   };
   let rangeBusy = false;
+  let pendingRangeScope;
   const fetchRange = async (scope) => {
-    if (scope === "today" || rangeBusy) return;
+    if (scope === "today") return;
+    if (rangeBusy) {
+      pendingRangeScope = scope;
+      return;
+    }
     const call = statsCall();
     if (!call) return;
     rangeBusy = true;
@@ -313,6 +318,9 @@ function createStatsSource(context, totalScopeEnabled = () => "today") {
     } finally {
       rangeBusy = false;
     }
+    const deferredScope = pendingRangeScope;
+    pendingRangeScope = void 0;
+    if (deferredScope !== void 0) void fetchRange(deferredScope);
   };
   const totalFor = (scope) => scope === "today" ? todayStats() : rangeStats()?.[scope];
   const fetchTotals = (scopeOverride) => {

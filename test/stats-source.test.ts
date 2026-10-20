@@ -216,3 +216,42 @@ test("withFetchTimeout rejects after 15s when the host call never settles", asyn
   await new Promise<void>((resolve) => setImmediate(resolve))
   await rejection
 })
+
+// v0.7.33 regression: a scope switch that lands while a range fetch is in
+// flight used to be silently dropped (`if (rangeBusy) return`), leaving the
+// newly selected window blank until the next 60s tick.
+test("a scope requested while a range fetch is in flight is fetched after it settles", async () => {
+  const requestedScopes: string[] = []
+  const scopeTokensByTag: Record<string, { input: number; output: number }> = {
+    "24h": { input: 10, output: 20 },
+    "7d": { input: 70, output: 80 },
+  }
+  let releaseFirstCall: (() => void) | undefined
+  const firstCallGate = new Promise<void>((resolve) => {
+    releaseFirstCall = resolve
+  })
+  const statsSource = createStatsSource({
+    client: {
+      session: {
+        stats: async (input: Record<string, unknown>) => {
+          const windowMs = (input.to as number) - (input.from as number)
+          const scopeTag = windowMs > 3 * 86_400_000 ? "7d" : "24h"
+          requestedScopes.push(scopeTag)
+          if (requestedScopes.length === 1) await firstCallGate
+          return { data: { tokens: scopeTokensByTag[scopeTag] } }
+        },
+      },
+    },
+  })
+  const firstFetch = statsSource.fetchRange("24h")
+  // The user switches scope while the first call is still in flight.
+  const secondFetch = statsSource.fetchRange("7d")
+  assert.deepEqual(requestedScopes, ["24h"])
+  releaseFirstCall?.()
+  await firstFetch
+  await secondFetch
+  // Give the deferred call its turn.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(requestedScopes, ["24h", "7d"])
+  assert.ok(statsSource.totalFor("7d")?.tokens)
+})
