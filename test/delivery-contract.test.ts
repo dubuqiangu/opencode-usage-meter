@@ -19,7 +19,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { tmpdir, userInfo } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -153,7 +153,16 @@ test("dist/tui.js: default export survived bundling", () => {
 test("dist/tui.js: no machine-local path leakage inside the bundle", () => {
   const bundleSource = readUtf8(distEntryPath)
   assert.ok(!/[A-Za-z]:[\\/](Users|workSpace)/.test(bundleSource), "absolute paths leaked into the artifact")
-  assert.ok(!bundleSource.includes("33204"), "local username leaked into the artifact")
+  // Read the running machine's account name instead of hard-coding it: the
+  // assertion still guards this checkout (where the leak would originate) but
+  // the repo no longer publishes one machine's username.
+  const localAccountName = userInfo().username
+  if (localAccountName.length >= 3) {
+    assert.ok(
+      !bundleSource.includes(localAccountName),
+      "local username leaked into the artifact",
+    )
+  }
 })
 
 // --- src posture contract ------------------------------------------------------

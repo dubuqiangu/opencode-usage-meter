@@ -1260,13 +1260,34 @@ function createSidebarMetrics(deps) {
 
 // src/components/footer-status.tsx
 import { createMemo as createMemo4 } from "solid-js";
+
+// src/footer-runs.ts
+var coalesceFooterRuns = (segments) => {
+  const runs = [];
+  for (const segment of segments) {
+    const lastRun = runs[runs.length - 1];
+    if (lastRun !== void 0 && lastRun.dim === segment.dim) {
+      lastRun.text += `   ${segment.text}`;
+    } else {
+      runs.push({
+        text: runs.length > 0 ? `   ${segment.text}` : segment.text,
+        dim: segment.dim
+      });
+    }
+  }
+  return runs;
+};
+
+// src/components/footer-status.tsx
 import { jsx as jsx4 } from "@opentui/solid/jsx-runtime";
+var DIM_TEXT_ATTRIBUTE = 1 << 1;
 function createFooterStatus(deps) {
   const { context, now } = deps;
   const { starts, lastDurations, lastAvgRates, lastExactRates, rates, backfillLastTurn } = deps.sessionMetrics;
   const { hitScopeEnabled, totalScopeEnabled, footerHitEnabled, footerSigmaEnabled } = deps.settings;
   const { todayStats, totalFor } = deps.statsSource;
   const { calibOf } = deps.calibration;
+  const lastLiveRates = /* @__PURE__ */ new Map();
   const FooterStatus = (componentProps) => {
     const slotProps = componentProps.slotProps;
     let sessionID;
@@ -1288,20 +1309,29 @@ function createFooterStatus(deps) {
       const last = lastDurations.get(sessionID);
       const parts = [];
       if (running && started !== void 0) {
-        parts.push(`\u23F1 ${format(currentTime - started)}`);
+        parts.push({ text: `\u23F1 ${format(currentTime - started)}` });
         const rate = rates.get(sessionID);
         const tps = rate ? liveRate(rate, currentTime) : void 0;
-        if (tps !== void 0) parts.push(`\u26A1 ${Math.round(tps * calibOf(sessionID))} tok/s`);
+        if (tps !== void 0) {
+          const tokensPerSecond = Math.round(tps * calibOf(sessionID));
+          lastLiveRates.set(sessionID, { turnStartedAt: started, tokensPerSecond });
+          parts.push({ text: `\u26A1 ${tokensPerSecond} tok/s` });
+        } else {
+          const memory = lastLiveRates.get(sessionID);
+          if (memory !== void 0 && memory.turnStartedAt === started) {
+            parts.push({ text: `\u26A1 ${memory.tokensPerSecond} tok/s`, dim: true });
+          }
+        }
       } else if (running) {
-        parts.push(`\u23F3`);
+        parts.push({ text: `\u23F3` });
       } else if (last !== void 0) {
-        parts.push(`\u{1F3C1} ${format(last)}`);
+        parts.push({ text: `\u{1F3C1} ${format(last)}` });
         const exact = lastExactRates.get(sessionID);
         if (exact !== void 0) {
-          parts.push(`\u26A1 ${exact} tok/s`);
+          parts.push({ text: `\u26A1 ${exact} tok/s` });
         } else {
           const avg = lastAvgRates.get(sessionID);
-          if (avg !== void 0) parts.push(`\u26A1 ${avg} tok/s avg`);
+          if (avg !== void 0) parts.push({ text: `\u26A1 ${avg} tok/s avg` });
         }
       }
       const totalScope = totalScopeEnabled();
@@ -1310,7 +1340,9 @@ function createFooterStatus(deps) {
         const scopeTokens = scopeStats?.tokens;
         const scopeTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
         if (scopeTotal > 0) {
-          parts.push(`\u03A3 ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`);
+          parts.push({
+            text: `\u03A3 ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`
+          });
         }
       }
       const hitScope = hitScopeEnabled();
@@ -1323,7 +1355,8 @@ function createFooterStatus(deps) {
             sessionTokens?.input ?? 0,
             sessionTokens?.cache?.write ?? 0
           );
-          if (sessionRatio !== void 0) parts.push(`hit\xB7s ${(sessionRatio * 100).toFixed(1)}%`);
+          if (sessionRatio !== void 0)
+            parts.push({ text: `hit\xB7s ${(sessionRatio * 100).toFixed(1)}%` });
         } catch {
         }
       }
@@ -1332,15 +1365,18 @@ function createFooterStatus(deps) {
         const todayTokens = stats?.tokens;
         if (showHitInFooter && hitScope !== "session") {
           const dailyRatio = dailyHitRatio(todayTokens?.cache?.read ?? 0, todayTokens?.input ?? 0);
-          if (dailyRatio !== void 0) parts.push(`hit ${(dailyRatio * 100).toFixed(1)}%`);
+          if (dailyRatio !== void 0) parts.push({ text: `hit ${(dailyRatio * 100).toFixed(1)}%` });
         }
       }
-      return parts.length > 0 ? parts.join("   ") : null;
+      return parts.length > 0 ? parts : null;
     });
     if (statusText() === null) return null;
     const muted = context.theme?.text?.muted;
-    return /* @__PURE__ */ jsx4("text", { fg: muted, children: () => {
-      return statusText();
+    return /* @__PURE__ */ jsx4("box", { flexDirection: "row", children: () => {
+      const segments = statusText();
+      if (!segments) return null;
+      const runs = coalesceFooterRuns(segments);
+      return runs.map((run) => /* @__PURE__ */ jsx4("text", { fg: muted, attributes: run.dim ? DIM_TEXT_ATTRIBUTE : 0, children: run.text }));
     } });
   };
   return { FooterStatus };
