@@ -415,6 +415,7 @@ function createSessionMetrics(deps) {
   const lastExactRates = /* @__PURE__ */ new Map();
   const rates = /* @__PURE__ */ new Map();
   const newRateState = (sessionID) => ({ sessionID, msgs: /* @__PURE__ */ new Map(), samples: [], sessionVocab: false });
+  const turnTokens = /* @__PURE__ */ new Map();
   const rateStateOf = (sessionID) => {
     if (!starts.has(sessionID)) return void 0;
     let st = rates.get(sessionID);
@@ -446,6 +447,14 @@ function createSessionMetrics(deps) {
   const exactRateFromRecords = (sessionID, startedMs) => {
     try {
       const messages = context.data?.session?.message?.list?.(sessionID) ?? [];
+      let userAnchor;
+      for (const message of messages) {
+        if (message?.type !== "user") continue;
+        const created = tsOf(message?.time?.created);
+        if (created === void 0) continue;
+        if (userAnchor === void 0 || created > userAnchor) userAnchor = created;
+      }
+      const boundary = userAnchor !== void 0 && userAnchor <= startedMs + 1e3 ? userAnchor : startedMs - 2e3;
       let toks = 0;
       let genMs = 0;
       for (const m of messages) {
@@ -454,9 +463,10 @@ function createSessionMetrics(deps) {
         const completed = tsOf(m?.time?.completed);
         const out = (m?.tokens?.output ?? 0) + (m?.tokens?.reasoning ?? 0);
         if (created === void 0 || completed === void 0 || out <= 0) continue;
-        if (created < startedMs - 2e3) continue;
+        if (created < boundary) continue;
+        if (completed <= created) continue;
         toks += out;
-        genMs += Math.max(0, completed - created);
+        genMs += completed - created;
       }
       if (toks > 0 && genMs >= 500) {
         lastExactRates.set(sessionID, Math.round(toks / (genMs / 1e3)));
@@ -517,16 +527,22 @@ function createSessionMetrics(deps) {
   const onExecutionStarted = (event) => {
     const sessionID = sessionIDOf(event);
     if (!sessionID) return;
+    lastExactRates.delete(sessionID);
+    lastAvgRates.delete(sessionID);
     starts.set(sessionID, Date.now());
     rates.set(sessionID, newRateState(sessionID));
+    turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1);
   };
   const onStepStarted = (event) => {
     const sessionID = sessionIDOf(event);
     const data = dataOf(event);
     const started = data?.started;
-    if (sessionID && typeof started === "number" && !starts.has(sessionID)) {
+    if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
+      lastExactRates.delete(sessionID);
+      lastAvgRates.delete(sessionID);
       starts.set(sessionID, started);
       rates.set(sessionID, newRateState(sessionID));
+      turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1);
     }
   };
   const delayedRecomputeTimers = [];
@@ -534,6 +550,7 @@ function createSessionMetrics(deps) {
     const sessionID = sessionIDOf(event);
     if (!sessionID) return;
     const started = starts.get(sessionID);
+    const turnToken = turnTokens.get(sessionID);
     if (started !== void 0) {
       const elapsed = Date.now() - started;
       lastDurations.set(sessionID, elapsed);
@@ -546,6 +563,7 @@ function createSessionMetrics(deps) {
       const delayedRecompute = setTimeout(() => {
         const timerIndex = delayedRecomputeTimers.indexOf(delayedRecompute);
         if (timerIndex >= 0) delayedRecomputeTimers.splice(timerIndex, 1);
+        if (turnTokens.get(sessionID) !== turnToken) return;
         try {
           exactRateFromRecords(sessionID, started);
         } catch {
@@ -969,6 +987,7 @@ function createStatsPanel(deps) {
     try {
       const current = panelAPI?.current?.();
       if (current === PANEL_NAME || current?.name === PANEL_NAME) {
+        disposeFullscreenLayer();
         panelAPI?.close?.();
         return;
       }
@@ -1165,7 +1184,6 @@ function createSidebarMetrics(deps) {
   const { todayStats, totalFor } = deps.statsSource;
   const { calibOf } = deps.calibration;
   const SidebarMetrics = (props) => {
-    if (!sidebarMetricsEnabled()) return null;
     const sessionID = props.sessionID;
     backfillLastTurn(sessionID);
     const blockState = createMemo3(() => {
@@ -1232,25 +1250,32 @@ function createSidebarMetrics(deps) {
       }
       return { collapsed, metricText };
     });
-    const initialState = blockState();
-    if (!initialState.collapsed && initialState.metricText === null) return null;
+    const hasContent = createMemo3(() => {
+      if (!sidebarMetricsEnabled()) return false;
+      const state = blockState();
+      return state.collapsed || state.metricText !== null;
+    });
     const base = context.theme?.text?.base;
     const muted = context.theme?.text?.muted;
     return /* @__PURE__ */ jsxs("box", { flexDirection: "column", children: [
-      /* @__PURE__ */ jsx3(
-        "box",
-        {
-          flexDirection: "row",
-          width: "100%",
-          onMouseUp: () => {
-            toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed());
-          },
-          children: /* @__PURE__ */ jsx3("text", { fg: base, selectable: false, children: () => {
-            return `${blockState().collapsed ? "\u25B8" : "\u25BC"} Stats`;
-          } })
-        }
-      ),
       () => {
+        if (!hasContent()) return null;
+        return /* @__PURE__ */ jsx3(
+          "box",
+          {
+            flexDirection: "row",
+            width: "100%",
+            onMouseUp: () => {
+              toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed());
+            },
+            children: /* @__PURE__ */ jsx3("text", { fg: base, selectable: false, children: () => {
+              return `${blockState().collapsed ? "\u25B8" : "\u25BC"} Stats`;
+            } })
+          }
+        );
+      },
+      () => {
+        if (!hasContent()) return null;
         return blockState().collapsed ? null : /* @__PURE__ */ jsx3("text", { fg: muted, children: () => blockState().metricText });
       }
     ] });
@@ -1370,7 +1395,6 @@ function createFooterStatus(deps) {
       }
       return parts.length > 0 ? parts : null;
     });
-    if (statusText() === null) return null;
     const muted = context.theme?.text?.muted;
     return /* @__PURE__ */ jsx4("box", { flexDirection: "row", children: () => {
       const segments = statusText();
@@ -1529,14 +1553,17 @@ var tui_default = Plugin.define({
       console.error("[usage-meter] sidebar.content slot failed:", error);
     }
     let layerDispose;
+    let layerFailureAt = 0;
+    const LAYER_RETRY_INTERVAL_MS = 5e3;
     let unregisterAppSlot;
     try {
       unregisterAppSlot = context.ui.slot({
         append: "app",
         render: () => {
-          if (layerDispose === void 0) {
+          const retryDue = layerDispose === void 0 && (layerFailureAt === 0 || Date.now() - layerFailureAt >= LAYER_RETRY_INTERVAL_MS);
+          if (retryDue) {
             try {
-              layerDispose = context.keymap?.layer?.(() => ({
+              const created = context.keymap?.layer?.(() => ({
                 mode: "global",
                 commands: [
                   {
@@ -1594,9 +1621,16 @@ var tui_default = Plugin.define({
                   }
                 ]
               }));
+              if (created) {
+                layerDispose = created;
+                layerFailureAt = 0;
+              } else {
+                layerFailureAt = Date.now();
+                console.error("[usage-meter] keymap layer unavailable (will retry)");
+              }
             } catch (error) {
-              layerDispose = null;
-              console.error("[usage-meter] keymap layer failed:", error);
+              layerFailureAt = Date.now();
+              console.error("[usage-meter] keymap layer failed (will retry):", error);
             }
           }
           return null;

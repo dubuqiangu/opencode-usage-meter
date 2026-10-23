@@ -2,7 +2,7 @@
 
 挂载点:`prompt.footer.status`(append 模式,不覆盖原生状态行)。当前会话的实时读数,随 500ms 时钟跳动。
 
-> **刷新机制(0.7.8 → 0.7.12 三环链路定版)**:整行文本在 `createMemo` 内计算(0.7.8);槽位渲染层经**函数子节点**包裹(`<box>{() => <FooterStatus/>}</box>`,0.7.12;组件内插值 `<text>{() => statusText()}</text>`,0.7.10),落入被跟踪的 render effect——signal 变化直接驱动重绘,不依赖宿主重挂;500ms tick 每次显式 `requestRender()` 上屏(0.7.11,宿主按需绘制,renderable 树更新本身不刷屏)。0.7.7 及以前所有段落都在组件函数体内预计算,函数体每次挂载只跑一次,刷新全靠宿主高频重绘 footer 掩盖。
+> **刷新机制(0.7.8 → 0.7.12 三环链路定版)**:整行文本在 `createMemo` 内计算(0.7.8);槽位渲染层经**函数子节点**包裹(`<box>{() => <FooterStatus/>}</box>`,0.7.12;组件内插值 `<text>{() => statusText()}</text>`,0.7.10),落入被跟踪的 render effect——signal 变化直接驱动重绘,不依赖宿主重挂;500ms tick 每次显式 `requestRender()` 上屏(0.7.11,宿主按需绘制,renderable 树更新本身不刷屏)。0.7.7 及以前所有段落都在组件函数体内预计算,函数体每次挂载只跑一次,刷新全靠宿主高频重绘 footer 掩盖。0.7.36 补最后一处同类盲区:组件体里的"空态早返回门"(`if (statusText() === null) return null`)已删,空态判定移入子 thunk——`createComponent` 的 untrack 使早返回成为永久快照,footer 首帧早于首轮时整行会一直空白,直到宿主重挂 footer slot。
 
 ## 状态与图标(0.7.3 起全图标化)
 

@@ -51,6 +51,13 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
     try {
       const current = panelAPI?.current?.()
       if (current === PANEL_NAME || current?.name === PANEL_NAME) {
+        // v0.7.36: releasing the layer used to depend on the host rendering
+        // this slot again with a foreign panel name. A self-close may never
+        // produce that render, leaving the "f" layer alive (and holding the
+        // dead panel object) for the rest of the session. Release BEFORE
+        // close(): both used to sit in the same try, so a throwing close()
+        // skipped the release and leaked the layer.
+        disposeFullscreenLayer()
         panelAPI?.close?.()
         return
       }

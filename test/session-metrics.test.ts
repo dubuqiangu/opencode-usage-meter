@@ -354,3 +354,143 @@ test("backfillLastTurn keeps retrying mid-run sessions until the turn completes 
   // exactRateFromRecords' record aggregation: 2 failed + 2 = 4.
   assert.equal(listCallCount, 4)
 })
+
+test("a new turn clears the previous turn's exact rate (0.7.36)", () => {
+  const turnStart = Date.now() - 5_000
+  const messages: unknown[] = [
+    {
+      type: "assistant",
+      time: { created: turnStart + 1_000, completed: turnStart + 3_000 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+  ]
+  const { metrics } = createMetricsHarness(messages)
+  metrics.onExecutionStarted({ sessionID: "ses_new_turn" })
+  metrics.starts.set("ses_new_turn", turnStart)
+  metrics.finishTurn({ sessionID: "ses_new_turn" })
+  assert.equal(metrics.lastExactRates.get("ses_new_turn"), 50)
+  const firstDuration = metrics.lastDurations.get("ses_new_turn")
+  assert.ok(firstDuration !== undefined)
+
+  // Next turn: the records are not synced yet, so no fresh rate can be
+  // computed. The stale 50 must not survive next to the NEW 🏁 duration.
+  messages.length = 0
+  metrics.onExecutionStarted({ sessionID: "ses_new_turn" })
+  metrics.starts.set("ses_new_turn", Date.now() - 1_000)
+  metrics.finishTurn({ sessionID: "ses_new_turn" })
+  assert.equal(metrics.lastExactRates.get("ses_new_turn"), undefined)
+  const secondDuration = metrics.lastDurations.get("ses_new_turn") as number
+  assert.ok(
+    secondDuration < firstDuration,
+    `duration was not updated: ${firstDuration} -> ${secondDuration}`,
+  )
+})
+
+test("a new turn clears the previous turn's avg rate (0.7.36)", () => {
+  const turnStart = Date.now() - 5_000
+  const { metrics } = createMetricsHarness()
+  metrics.onExecutionStarted({ sessionID: "ses_new_turn_avg" })
+  metrics.starts.set("ses_new_turn_avg", turnStart)
+  metrics.onSessionDelta({
+    sessionID: "ses_new_turn_avg",
+    assistantMessageID: "msg_one",
+    delta: "hello world",
+  })
+  metrics.finishTurn({ sessionID: "ses_new_turn_avg" })
+  assert.ok(metrics.lastAvgRates.get("ses_new_turn_avg") !== undefined)
+
+  // Second turn with no delta: it cannot produce an avg, so the previous
+  // turn's number must be gone rather than paired with the new duration.
+  metrics.onExecutionStarted({ sessionID: "ses_new_turn_avg" })
+  metrics.starts.set("ses_new_turn_avg", Date.now() - 1_000)
+  metrics.finishTurn({ sessionID: "ses_new_turn_avg" })
+  assert.equal(metrics.lastAvgRates.get("ses_new_turn_avg"), undefined)
+  assert.ok(metrics.lastDurations.get("ses_new_turn_avg") !== undefined)
+})
+
+test("the exact rate excludes the previous turn's assistant messages (0.7.36)", () => {
+  const turnStart = Date.now() - 10_000
+  const { metrics } = createMetricsHarness([
+    { type: "user", time: { created: turnStart - 1_500 }, tokens: {} },
+    {
+      type: "assistant",
+      time: { created: turnStart - 1_500, completed: turnStart - 500 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+    { type: "user", time: { created: turnStart }, tokens: {} },
+    {
+      type: "assistant",
+      time: { created: turnStart + 500, completed: turnStart + 2_500 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+  ])
+  metrics.onExecutionStarted({ sessionID: "ses_boundary" })
+  metrics.starts.set("ses_boundary", turnStart)
+  metrics.finishTurn({ sessionID: "ses_boundary" })
+  // 100 tokens over the current turn's 2s span. The old fixed window pulled
+  // the previous turn in as well: 200 tokens / 3s = 67 tok/s.
+  assert.equal(metrics.lastExactRates.get("ses_boundary"), 50)
+})
+
+test("zero-length assistant spans are not counted as samples (0.7.36)", () => {
+  const turnStart = Date.now() - 10_000
+  const { metrics } = createMetricsHarness([
+    {
+      type: "assistant",
+      time: { created: turnStart + 100, completed: turnStart + 100 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+    {
+      type: "assistant",
+      time: { created: turnStart + 200, completed: turnStart + 1_200 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+  ])
+  metrics.onExecutionStarted({ sessionID: "ses_zero_span" })
+  metrics.starts.set("ses_zero_span", turnStart)
+  metrics.finishTurn({ sessionID: "ses_zero_span" })
+  // The first record contributed 100 tokens but 0 ms of generation; keeping
+  // it (as Math.max(0, ...) did) doubled the rate to 200 tok/s.
+  assert.equal(metrics.lastExactRates.get("ses_zero_span"), 100)
+})
+
+test("a delayed recompute from the previous turn cannot overwrite the new one (0.7.36)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const base = 1_700_000_000_000
+  const messages: unknown[] = [
+    {
+      type: "assistant",
+      time: { created: base, completed: base + 1_000 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+  ]
+  const { metrics } = createMetricsHarness(messages)
+
+  // Turn 1 settles at 100 tok/s and schedules its 1.5s follow-up recompute.
+  metrics.onExecutionStarted({ sessionID: "ses_stale_timer" })
+  metrics.starts.set("ses_stale_timer", base)
+  metrics.finishTurn({ sessionID: "ses_stale_timer" })
+  assert.equal(metrics.lastExactRates.get("ses_stale_timer"), 100)
+
+  // 100ms later the next turn starts; by the time the OLD timer fires, the
+  // list holds both turns' records.
+  await t.mock.timers.tick(100)
+  messages.push(
+    { type: "user", time: { created: base + 3_000 }, tokens: {} },
+    {
+      type: "assistant",
+      time: { created: base + 3_000, completed: base + 5_500 },
+      tokens: { output: 100, reasoning: 0 },
+    },
+  )
+  metrics.onExecutionStarted({ sessionID: "ses_stale_timer" })
+  metrics.starts.set("ses_stale_timer", base + 3_000)
+  metrics.finishTurn({ sessionID: "ses_stale_timer" })
+  assert.equal(metrics.lastExactRates.get("ses_stale_timer"), 40)
+
+  // Fire only turn 1's timer (turn 2's is scheduled 100ms later). A stale
+  // recompute would rescan with turn 1's start and blend the turns:
+  // 200 tokens over 3.5s = 57 tok/s.
+  await t.mock.timers.tick(1_400)
+  assert.equal(metrics.lastExactRates.get("ses_stale_timer"), 40)
+})

@@ -53,6 +53,13 @@ export function createSessionMetrics(deps: {
   const newRateState = (sessionID: string): RateState =>
     ({ sessionID, msgs: new Map(), samples: [], sessionVocab: false })
 
+  // v0.7.36: monotonically increasing per-session turn counter. The delayed
+  // recompute below captures the token of the turn that scheduled it and
+  // drops itself if a newer turn has started — otherwise it rescans the
+  // CURRENT message list with the OLD start time and overwrites the new
+  // turn's freshly settled rate with a blend of both turns.
+  const turnTokens = new Map<string, number>()
+
   const rateStateOf = (sessionID: string): RateState | undefined => {
     if (!starts.has(sessionID)) return undefined // only track during a run
     let st = rates.get(sessionID)
@@ -105,6 +112,25 @@ export function createSessionMetrics(deps: {
   const exactRateFromRecords = (sessionID: string, startedMs: number): void => {
     try {
       const messages = context.data?.session?.message?.list?.(sessionID) ?? []
+      // v0.7.36: the turn boundary used to be a fixed 2s window
+      // (created < startedMs - 2000). That both pulled the PREVIOUS turn's
+      // assistant into this turn when the user replied within two seconds,
+      // and dropped this turn's own early messages when the client and server
+      // clocks disagree by more than two seconds. Anchor on the session's
+      // last user message instead: everything after it belongs to this turn.
+      // The anchor must not be newer than the turn start, otherwise a queued
+      // next-turn user message would exclude this turn's own replies.
+      let userAnchor: number | undefined
+      for (const message of messages) {
+        if (message?.type !== "user") continue
+        const created = tsOf(message?.time?.created)
+        if (created === undefined) continue
+        if (userAnchor === undefined || created > userAnchor) userAnchor = created
+      }
+      const boundary =
+        userAnchor !== undefined && userAnchor <= startedMs + 1_000
+          ? userAnchor
+          : startedMs - 2_000
       let toks = 0
       let genMs = 0
       for (const m of messages) {
@@ -113,9 +139,13 @@ export function createSessionMetrics(deps: {
         const completed = tsOf(m?.time?.completed)
         const out = (m?.tokens?.output ?? 0) + (m?.tokens?.reasoning ?? 0)
         if (created === undefined || completed === undefined || out <= 0) continue
-        if (created < startedMs - 2_000) continue // message from a previous turn
+        if (created < boundary) continue // message from a previous turn
+        // v0.7.36: a non-positive generation span is not a sample — the old
+        // Math.max(0, ...) kept the tokens while adding zero milliseconds,
+        // which inflates the rate.
+        if (completed <= created) continue
         toks += out
-        genMs += Math.max(0, completed - created)
+        genMs += completed - created
       }
       if (toks > 0 && genMs >= 500) {
         lastExactRates.set(sessionID, Math.round(toks / (genMs / 1000)))
@@ -221,8 +251,18 @@ export function createSessionMetrics(deps: {
   const onExecutionStarted = (event: any): void => {
     const sessionID = sessionIDOf(event)
     if (!sessionID) return
+    // v0.7.36: a new turn invalidates the previous turn's idle readout. All
+    // three surfaces pair 🏁 (this turn's duration) with whatever
+    // lastExactRates/lastAvgRates still holds, and finishTurn only writes
+    // them when it can compute a fresh value — so an interrupted/failed turn,
+    // an unsynced message record, or a turn with no deltas used to show the
+    // NEW duration next to the OLD rate. Deleting here makes a turn that
+    // cannot produce a rate show no ⚡ at all, which is the honest outcome.
+    lastExactRates.delete(sessionID)
+    lastAvgRates.delete(sessionID)
     starts.set(sessionID, Date.now())
     rates.set(sessionID, newRateState(sessionID))
+    turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1)
   }
 
   const onStepStarted = (event: any): void => {
@@ -230,9 +270,12 @@ export function createSessionMetrics(deps: {
     const sessionID = sessionIDOf(event)
     const data = dataOf(event)
     const started = data?.started
-    if (sessionID && typeof started === "number" && !starts.has(sessionID)) {
+    if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
+      lastExactRates.delete(sessionID)
+      lastAvgRates.delete(sessionID)
       starts.set(sessionID, started)
       rates.set(sessionID, newRateState(sessionID))
+      turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1)
     }
   }
 
@@ -245,6 +288,7 @@ export function createSessionMetrics(deps: {
     const sessionID = sessionIDOf(event)
     if (!sessionID) return
     const started = starts.get(sessionID)
+    const turnToken = turnTokens.get(sessionID)
     if (started !== undefined) {
       const elapsed = Date.now() - started
       lastDurations.set(sessionID, elapsed)
@@ -259,6 +303,10 @@ export function createSessionMetrics(deps: {
       const delayedRecompute = setTimeout(() => {
         const timerIndex = delayedRecomputeTimers.indexOf(delayedRecompute)
         if (timerIndex >= 0) delayedRecomputeTimers.splice(timerIndex, 1)
+        // v0.7.36: a newer turn has started — this recompute would rescan
+        // the CURRENT message list with the OLD start time and overwrite the
+        // new turn's freshly settled rate with a blend of both turns.
+        if (turnTokens.get(sessionID) !== turnToken) return
         try {
           exactRateFromRecords(sessionID, started)
         } catch {}

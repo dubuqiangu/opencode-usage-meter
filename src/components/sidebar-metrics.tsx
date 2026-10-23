@@ -64,10 +64,6 @@ export function createSidebarMetrics(deps: {
   const { calibOf } = deps.calibration
 
   const SidebarMetrics = (props: { sessionID: string }) => {
-    // Mount-time gate — same semantics as the pre-0.7.8 body check:
-    // toggling the block off in /usage-settings removes it on the next
-    // host re-mount of the sidebar.
-    if (!sidebarMetricsEnabled()) return null
     const sessionID = props.sessionID
     // v0.7.5: sessions opened after a TUI restart have no in-memory turn
     // history yet — replay the last turn from synced records once (guarded,
@@ -165,51 +161,72 @@ export function createSidebarMetrics(deps: {
       }
       return { collapsed, metricText }
     })
-    // Mount-time gate mirrors the pre-0.7.8 "no lines -> hide the whole
-    // block" rule (a collapsed header is always worth showing); afterwards
-    // the interpolations keep the caret and text live.
-    const initialState = blockState()
-    if (!initialState.collapsed && initialState.metricText === null) return null
+    // v0.7.36: the "nothing to show yet" gate used to be an early return in
+    // the component body. createComponent runs the body inside untrack, so
+    // that read never registered as a dependency — and because the body
+    // returned null, no child thunk was left that could have subscribed
+    // either. Every TUI start hits that window (the stats fetch resolves
+    // after the sidebar's first render), and the block then stayed invisible
+    // until the host happened to re-mount the sidebar.
+    // The gate is now a boolean memo read from the child thunks below:
+    // visibility becomes a tracked dependency, and because this memo only
+    // changes when visibility actually flips, the 500ms tick adds no work.
+    const hasContent = createMemo(() => {
+      // v0.7.36: the block's on/off switch is part of the same tracked gate.
+      // It used to be a component-body early return (createComponent runs the
+      // body inside untrack), so turning the block off in /usage-settings
+      // left it on screen until the host re-mounted the sidebar, while the
+      // dialog already said "off".
+      if (!sidebarMetricsEnabled()) return false
+      const state = blockState()
+      return state.collapsed || state.metricText !== null
+    })
     const base = (context.theme as any)?.text?.base
     const muted = context.theme?.text?.muted
     return (
       <box flexDirection="column">
-        {/* v0.7.9: full-width clickable header row — mouse-up toggles the
-            collapsed flag in the durable settings store. */}
-        <box
-          flexDirection="row"
-          width="100%"
-          onMouseUp={() => {
-            // v0.7.30: the displayed state IS the persisted store value, so
-            // flipping it needs no reconciliation with a local mirror. The
-            // store mutation re-runs the memo, and the 500ms tick requests a
-            // repaint, so the caret and metrics follow within a tick.
-            toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed())
-          }}
-        >
-          {/* v0.7.10: the label text opts out of text selection
-              (TextRenderable is selectable by default), so a header click
-              can never start a selection and the toggle semantics stay
-              clean. */}
-          {/* v0.7.16: function-child thunks, NOT eager interpolations.
-              Under esbuild --jsx=automatic a JSX interpolation is evaluated
-              once at component-call time — and createComponent runs the
-              component body inside untrack, so blockState() reads never
-              registered anywhere: the render tree froze at mount, and
-              neither the click flip nor the 500ms tick ever reached the
-              screen (the toggle only surfaced after a session switch
-              re-mounted the slot). Function children ARE tracked:
-              insertExpression builds a render effect around each thunk, so
-              blockState() becomes a live dependency — the caret patches
-              in place and the metrics subtree grows/shrinks on toggle,
-              same pattern as footer-status.tsx. */}
-          <text fg={base} selectable={false}>
-            {() => {
-              return `${blockState().collapsed ? "▸" : "▼"} Stats`
-            }}
-          </text>
-        </box>
         {() => {
+          if (!hasContent()) return null
+          return (
+            <box
+              flexDirection="row"
+              width="100%"
+              onMouseUp={() => {
+                // v0.7.30: the displayed state IS the persisted store value, so
+                // flipping it needs no reconciliation with a local mirror. The
+                // store mutation re-runs the memo, and the 500ms tick requests a
+                // repaint, so the caret and metrics follow within a tick.
+                toggleSettingsFlag("statsBlockCollapsed", statsBlockCollapsed())
+              }}
+            >
+              {/* v0.7.9: full-width clickable header row — mouse-up toggles the
+                  collapsed flag in the durable settings store. */}
+              {/* v0.7.10: the label text opts out of text selection
+                  (TextRenderable is selectable by default), so a header click
+                  can never start a selection and the toggle semantics stay
+                  clean. */}
+              {/* v0.7.16: function-child thunks, NOT eager interpolations.
+                  Under esbuild --jsx=automatic a JSX interpolation is evaluated
+                  once at component-call time — and createComponent runs the
+                  component body inside untrack, so blockState() reads never
+                  registered anywhere: the render tree froze at mount, and
+                  neither the click flip nor the 500ms tick ever reached the
+                  screen (the toggle only surfaced after a session switch
+                  re-mounted the slot). Function children ARE tracked:
+                  insertExpression builds a render effect around each thunk, so
+                  blockState() becomes a live dependency — the caret patches
+                  in place and the metrics subtree grows/shrinks on toggle,
+                  same pattern as footer-status.tsx. */}
+              <text fg={base} selectable={false}>
+                {() => {
+                  return `${blockState().collapsed ? "▸" : "▼"} Stats`
+                }}
+              </text>
+            </box>
+          )
+        }}
+        {() => {
+          if (!hasContent()) return null
           return blockState().collapsed ? null : (
             <text fg={muted}>{() => blockState().metricText}</text>
           )

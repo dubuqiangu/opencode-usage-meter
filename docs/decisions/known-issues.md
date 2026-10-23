@@ -54,3 +54,27 @@
 - **`panel.open` 宿主假设(0.7.12 #6 修复的有意权衡,备查)**:`/usage-full` 按 `ui.panel.open` 返回 **boolean** 语义判断成败(`!== true` 即降级弹窗);若未来宿主改为返回 Promise(异步 open)或其他非 true 对象,命令会误入弹窗降级、出现"面板 + 弹窗双表面"。当前实证宿主(v2.0.21)返回 boolean;如遇异步宿主需改为 await/then 链
 - **`void updateSettingsStore(...)` promise 拒绝未挂 catch(0.7.29 已修)**:0.7.29 起 `settings.ts` 三处 toggle 与 `calibration.ts` 的持久化写均已链 `.catch(console.error)`,宿主 storage 写失败不再产生 unhandledRejection 噪音。本条留作历史记录
 - **热重载生命周期(0.7.3 真机实证)**:`plugin update` 只改磁盘包,运行中宿主仍持旧代码;`/reload` 拆掉旧实例定时器与订阅但不从磁盘重载插件——表现为计时冻结、tok/s 停更。**更新后必须完整重启 TUI**
+- **`.tsx` 组件无单测覆盖(0.7.36 审视)**:`test/test-loader.mjs` 只补 `.ts` 解析,`footer-status.tsx` / `sidebar-metrics.tsx` 里的门与渲染逻辑无法被 93 个用例加载;0.7.36 修掉的两个"挂载期早返回门"因此活过了 0.7.8→0.7.35 多轮真机验收。当前回归手段是 `@opentui/solid` 渲染探针(临时脚本,不入库)
+
+**未取证的宿主语义(0.7.36 全量审视;插件侧无法证明,结论按此假设成立)**:
+
+1. `context.storage.store` 的 `update(draft => ...)` 是"延迟回调 + 顺序应用同一 live draft"还是"调用时快照 + 立即提交"——直接影响 0.7.31 连点修复与设置弹窗 `s` 键;当前按前者设计,并用 deferred 模型单测锁定
+2. `session.step.ended.tokens.output` 是"消息累计"还是"按步计数"——直接影响 `adoptExact` 的 `out > 当前估算` 门槛与 `turnTotal`
+3. `context.data.session.sync(id)` 的返回语义(Promise / boolean / 静默失败)——直接影响 0.7.32 的 `syncedChildren` 释放时机
+4. `context.data.session.message.list(id)` 是否始终同步返回数组(当前按同步数组消费)
+5. 宿主是否会在轮次结束后补发旧 assistant 的 `message.updated`——影响空闲 `⚡` 的归属(`onMessageUpdated` 目前不校验"是否最后一轮/最后一条")
+6. `app` slot 的 render 调用频率(一次 vs 多次)——0.7.36 的 keymap layer 5s 退避重试依赖它被重复调用;若宿主只调用一次,首次失败仍会整场失效,届时应改用受 release 管理的定时器
+7. `session.text.delta` 与 `session.step.ended` 的 `assistantMessageID` 是否严格一致——不一致时同一输出会落 `_anon` 与实名两个桶,造成 est + exact 双计
+8. `session.status()` 的返回形态(当前按字符串 `"running"` 判断)
+9. `session.panel` slot 在 `panelAPI.close()` 后是否还会再渲染一次——0.7.36 起自关分支主动释放 `f` 层,不再依赖这一行为;若宿主确实重渲一次,`disposeFullscreenLayer()` 幂等,无副作用
+
+**刻意不改项(0.7.36 审视结论,避免后续重复排查)**:
+
+- `fetchToday` 在 `statsBusy` 时丢弃刷新(与 0.7.33 修过的 `fetchRange` 不同):60s tick 自愈,无数据丢失
+- 子会话 `sync()` 失败无退避(面板打开期间每 500ms 重试):仅在面板打开时发生;若日志刷屏再加时间戳退避
+- `ensureDetail` 允许并发调用:后返回者覆盖前者,聚合结构不会被破坏,下次刷新自愈
+- `statsSource.release()` 不取消在飞请求、不清 `panelRefresh`:teardown 后最多多写一次只读结果
+- `reactive-mount` 的 `dispose` / `release` 为空实现:正常路径已由宿主 computation 的 dispose 覆盖(探针实证旧 box children 1→0 且脱离父节点);"宿主注销 slot 但保留节点"未观测到
+- `lastDurations` / `lastExactRates` / `lastAvgRates` / `backfillLastAttemptAt` 的 per-session Map 终身增长:与 `sessionModels` / `syncedChildren` 同性质(会话数量级、零宿主句柄)
+- `backfillLastTurn` 成功路径会第二次调用 `message.list`:冗余但已被测试锁定,无正确性问题
+- 右栏在 4s 间隙仍整项隐藏 ⚡(与 footer 的 DIM 淡化策略不同):统一需另评块高抖动代价,见上方 0.7.35 条目

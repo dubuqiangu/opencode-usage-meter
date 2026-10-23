@@ -203,14 +203,24 @@ export default Plugin.define({
     // in 0.6.x. Register from an `app` slot render instead (runs once inside
     // the component tree).
     let layerDispose: any
+    // v0.7.36: retry bookkeeping — a single failed attempt must not kill the
+    // layer for the whole session (0.6.4: the app slot's first render can
+    // land before Keymap.Provider exists). Failures leave the handle
+    // undefined and the next app render retries, throttled so a permanently
+    // broken host cannot spam the log.
+    let layerFailureAt = 0
+    const LAYER_RETRY_INTERVAL_MS = 5_000
     let unregisterAppSlot: any
     try {
       unregisterAppSlot = context.ui.slot({
         append: "app",
         render: () => {
-          if (layerDispose === undefined) {
+          const retryDue =
+            layerDispose === undefined &&
+            (layerFailureAt === 0 || Date.now() - layerFailureAt >= LAYER_RETRY_INTERVAL_MS)
+          if (retryDue) {
             try {
-              layerDispose = (context.keymap as any)?.layer?.(() => ({
+              const created = (context.keymap as any)?.layer?.(() => ({
                 mode: "global",
                 commands: [
                   {
@@ -276,9 +286,16 @@ export default Plugin.define({
                   },
                 ],
               }))
+              if (created) {
+                layerDispose = created
+                layerFailureAt = 0
+              } else {
+                layerFailureAt = Date.now()
+                console.error("[usage-meter] keymap layer unavailable (will retry)")
+              }
             } catch (error) {
-              layerDispose = null
-              console.error("[usage-meter] keymap layer failed:", error)
+              layerFailureAt = Date.now()
+              console.error("[usage-meter] keymap layer failed (will retry):", error)
             }
           }
           return null

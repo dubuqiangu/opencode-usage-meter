@@ -206,9 +206,13 @@ export function createFooterStatus(deps: {
       }
       return parts.length > 0 ? parts : null
     })
-    // Mount-time gate mirrors the pre-0.7.8 "no segments -> hide the row"
-    // rule; afterwards the interpolation keeps the text live.
-    if (statusText() === null) return null
+    // v0.7.36: the "nothing to show" gate lives in the child thunk below, not
+    // here. This body runs inside untrack (createComponent), so an early
+    // return would freeze the row at its mount-time emptiness and no later
+    // signal could bring it back — exactly what happened when the footer
+    // slot's first render landed before any turn existed. The mount box is
+    // created by reactive-mount.ts either way, so returning an empty <box>
+    // instead of null is layout-identical.
     const muted = context.theme?.text?.muted
     // v0.7.35: the row is no longer one <text>. A <text> carries a single fg
     // and a single attribute set for its whole content, so the stale ⚡
