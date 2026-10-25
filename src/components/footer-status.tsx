@@ -15,6 +15,8 @@ import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
 import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
+import { resolveLiveRateReading } from "../live-rate"
+import { DIM_TEXT_ATTRIBUTE } from "../text-attributes"
 import { coalesceFooterRuns } from "../footer-runs"
 import type { FooterSegment } from "../footer-runs"
 import type { CalibrationApi } from "../calibration"
@@ -30,17 +32,6 @@ export type FooterStatusApi = {
 // one fg, which meant a segment could only ever be one colour — so a
 // segment that needed to look different had to vanish instead. Splitting the
 // row into runs lets the stale tok/s keep its place and only change tone.
-// TextAttributes.DIM from @opentui/core (SGR 2), inlined as a number: src/ may
-// only import host-provided specifiers (@opentui/solid / solid-js /
-// @opencode/*), and `@opentui/core` is not one of them — importing it breaks
-// the delivery contract and, worse, the host's module resolution at load time
-// (pitfall #16). The value is a stable part of the attribute bitmask
-// (NONE 0, BOLD 1, DIM 2, ITALIC 4, UNDERLINE 8, …), read from the host's own
-// types.js next to the package (DIM: 1 << 1). The `attributes` prop itself is
-// a declared text option (TextOptions extends TextBufferOptions in
-// @opentui/core/renderables), and the text setter forwards it to
-// setDefaultAttributes + requestRender, so it re-paints on the tick.
-const DIM_TEXT_ATTRIBUTE = 1 << 1
 
 export function createFooterStatus(deps: {
   context: any
@@ -51,18 +42,27 @@ export function createFooterStatus(deps: {
   now: () => number
 }): FooterStatusApi {
   const { context, now } = deps
-  const { starts, lastDurations, lastAvgRates, lastExactRates, rates, backfillLastTurn } =
-    deps.sessionMetrics
+  const {
+    starts,
+    lastDurations,
+    lastAvgRates,
+    lastExactRates,
+    lastLiveRates,
+    rates,
+    backfillLastTurn,
+  } = deps.sessionMetrics
   const { hitScopeEnabled, totalScopeEnabled, footerHitEnabled, footerSigmaEnabled } =
     deps.settings
   const { todayStats, totalFor } = deps.statsSource
   const { calibOf } = deps.calibration
 
-  // v0.7.35: last LIVE rate per session. When liveRate() drops out (tool
-  // run > 4s, or the model is thinking without text deltas) the footer used
-  // to lose its ⚡ segment and the row visibly shrank. We now keep showing
-  // the last number we actually had and dim it, so the row keeps its shape
-  // and reads as "not moving right now". Deliberately NOT lastExactRates/
+  // v0.7.35/0.7.37: last LIVE rate per session. The Map lives in
+  // session-metrics so the right-sidebar block reads the same memory; the rule
+  // itself is resolveLiveRateReading(). When liveRate() drops out (tool run
+  // > 4s, or the model is thinking without text deltas) the footer used to
+  // lose its ⚡ segment and the row visibly shrank. We now keep showing the
+  // last number we actually had and dim it, so the row keeps its shape and
+  // reads as "not moving right now". Deliberately NOT lastExactRates/
   // lastAvgRates: those are finished-turn values (they jump to the turn
   // average the moment a turn ends), while this is the number the row was
   // showing a moment ago — the one the user is watching.
@@ -76,7 +76,6 @@ export function createFooterStatus(deps: {
   // memory". One entry per session for the plugin instance's lifetime —
   // the same bounded shape as sessionModels (session-count magnitude, no
   // host handles), recorded in known-issues.
-  const lastLiveRates = new Map<string, { turnStartedAt: number; tokensPerSecond: number }>()
 
   const FooterStatus = (componentProps: { slotProps?: any }) => {
     const slotProps = componentProps.slotProps
@@ -127,22 +126,22 @@ export function createFooterStatus(deps: {
         // without a start timestamp, 🏁 last turn. No textual state words.
         parts.push({ text: `⏱ ${format(currentTime - started)}` })
         const rate = rates.get(sessionID)
-        const tps = rate ? liveRate(rate, currentTime) : undefined
-        if (tps !== undefined) {
-          const tokensPerSecond = Math.round(tps * calibOf(sessionID))
-          lastLiveRates.set(sessionID, { turnStartedAt: started, tokensPerSecond })
-          parts.push({ text: `⚡ ${tokensPerSecond} tok/s` })
-        } else {
-          // v0.7.35: no live window right now — hold the last known number in
-          // the same wording, dimmed, instead of dropping the segment and
-          // reflowing the row. The turn stamp must match, so a fresh turn
-          // never revives the previous turn's number; no memory at all (first
-          // seconds of a turn, or after a restart) means there is nothing
-          // honest to show, so the segment is omitted exactly as before.
-          const memory = lastLiveRates.get(sessionID)
-          if (memory !== undefined && memory.turnStartedAt === started) {
-            parts.push({ text: `⚡ ${memory.tokensPerSecond} tok/s`, dim: true })
-          }
+        const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : undefined
+        const reading = resolveLiveRateReading(
+          lastLiveRates,
+          sessionID,
+          started,
+          liveTokensPerSecond === undefined
+            ? undefined
+            : Math.round(liveTokensPerSecond * calibOf(sessionID)),
+        )
+        if (reading !== undefined) {
+          const segment: FooterSegment = { text: `⚡ ${reading.tokensPerSecond} tok/s` }
+          // Only set `dim` when true: coalesceFooterRuns groups by strict
+          // equality, and `dim: false` would split off a run from the
+          // neighbouring segments whose flag is `undefined`.
+          if (reading.dim) segment.dim = true
+          parts.push(segment)
         }
       } else if (running) {
         parts.push({ text: `⏳` })

@@ -33,6 +33,8 @@ import { createMemo } from "solid-js"
 import { fmtNum, format } from "../format"
 import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
+import { resolveLiveRateReading } from "../live-rate"
+import { DIM_TEXT_ATTRIBUTE } from "../text-attributes"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
 import type { SettingsApi } from "../settings"
@@ -51,8 +53,15 @@ export function createSidebarMetrics(deps: {
   now: () => number
 }): SidebarMetricsApi {
   const { context, now } = deps
-  const { starts, lastDurations, lastAvgRates, lastExactRates, rates, backfillLastTurn } =
-    deps.sessionMetrics
+  const {
+    starts,
+    lastDurations,
+    lastAvgRates,
+    lastExactRates,
+    lastLiveRates,
+    rates,
+    backfillLastTurn,
+  } = deps.sessionMetrics
   const {
     sidebarMetricsEnabled,
     statsBlockCollapsed,
@@ -86,7 +95,7 @@ export function createSidebarMetrics(deps: {
     const blockState = createMemo(() => {
       const currentTime = now()
       const collapsed = statsBlockCollapsed()
-      let metricText: string | null = null
+      const blockLines: Array<{ text: string; dim: boolean }> = []
       if (!collapsed) {
         // 0.7.21: wrap the host status() read — see footer-status.tsx; a
         // throwing client must degrade to "not running", not poison the
@@ -97,24 +106,32 @@ export function createSidebarMetrics(deps: {
         } catch {}
         const started = starts.get(sessionID)
         const last = lastDurations.get(sessionID)
-        const metricLines: string[] = []
         // v0.7.1: narrow column — split time and rate onto separate lines,
         // English-only labels, and unify the scope suffix in parentheses.
         if (running && started !== undefined) {
-          metricLines.push(`⏱ ${format(currentTime - started)}`)
+          blockLines.push({ text: `⏱ ${format(currentTime - started)}`, dim: false })
           const rate = rates.get(sessionID)
-          const liveTokPerSec = rate ? liveRate(rate, currentTime) : undefined
-          if (liveTokPerSec !== undefined) {
-            metricLines.push(`⚡ ${Math.round(liveTokPerSec * calibOf(sessionID))} tok/s`)
+          const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : undefined
+          const reading = resolveLiveRateReading(
+            lastLiveRates,
+            sessionID,
+            started,
+            liveTokensPerSecond === undefined
+              ? undefined
+              : Math.round(liveTokensPerSecond * calibOf(sessionID)),
+          )
+          if (reading !== undefined) {
+            blockLines.push({ text: `⚡ ${reading.tokensPerSecond} tok/s`, dim: reading.dim })
           }
         } else if (running) {
-          metricLines.push("⏳")
+          blockLines.push({ text: "⏳", dim: false })
         } else if (last !== undefined) {
-          metricLines.push(`🏁 ${format(last)}`)
+          blockLines.push({ text: `🏁 ${format(last)}`, dim: false })
           const exact = lastExactRates.get(sessionID)
           const avgRate = lastAvgRates.get(sessionID)
-          if (exact !== undefined) metricLines.push(`⚡ ${exact} tok/s`)
-          else if (avgRate !== undefined) metricLines.push(`⚡ ${avgRate} tok/s avg`)
+          if (exact !== undefined) blockLines.push({ text: `⚡ ${exact} tok/s`, dim: false })
+          else if (avgRate !== undefined)
+            blockLines.push({ text: `⚡ ${avgRate} tok/s avg`, dim: false })
         }
         const stats = todayStats()
         const hitScope = hitScopeEnabled()
@@ -134,11 +151,13 @@ export function createSidebarMetrics(deps: {
           const cacheInclusiveTotal =
             freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0)
           if (freshTokensTotal > 0) {
-            metricLines.push(
-              cacheInclusiveTotal > freshTokensTotal
-                ? `📊 ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})`
-                : `📊 ${fmtNum(freshTokensTotal)} (${totalScope})`,
-            )
+            blockLines.push({
+              text:
+                cacheInclusiveTotal > freshTokensTotal
+                  ? `📊 ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})`
+                  : `📊 ${fmtNum(freshTokensTotal)} (${totalScope})`,
+              dim: false,
+            })
           }
         }
         if (hitScope === "session") {
@@ -150,16 +169,18 @@ export function createSidebarMetrics(deps: {
               sessionTokens?.cache?.write ?? 0,
             )
             if (sessionRatio !== undefined)
-              metricLines.push(`🎯 ${(sessionRatio * 100).toFixed(1)}% (session)`)
+              blockLines.push({
+                text: `🎯 ${(sessionRatio * 100).toFixed(1)}% (session)`,
+                dim: false,
+              })
           } catch {}
         } else if (stats) {
           const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0)
           if (dailyRatio !== undefined)
-            metricLines.push(`🎯 ${(dailyRatio * 100).toFixed(1)}% (today)`)
+            blockLines.push({ text: `🎯 ${(dailyRatio * 100).toFixed(1)}% (today)`, dim: false })
         }
-        metricText = metricLines.length > 0 ? metricLines.join("\n") : null
       }
-      return { collapsed, metricText }
+      return { collapsed, lines: blockLines }
     })
     // v0.7.36: the "nothing to show yet" gate used to be an early return in
     // the component body. createComponent runs the body inside untrack, so
@@ -179,7 +200,7 @@ export function createSidebarMetrics(deps: {
       // dialog already said "off".
       if (!sidebarMetricsEnabled()) return false
       const state = blockState()
-      return state.collapsed || state.metricText !== null
+      return state.collapsed || state.lines.length > 0
     })
     const base = (context.theme as any)?.text?.base
     const muted = context.theme?.text?.muted
@@ -227,9 +248,18 @@ export function createSidebarMetrics(deps: {
         }}
         {() => {
           if (!hasContent()) return null
-          return blockState().collapsed ? null : (
-            <text fg={muted}>{() => blockState().metricText}</text>
-          )
+          const state = blockState()
+          if (state.collapsed) return null
+          // One <text> per line: a single <text> carries one attribute set for
+          // its whole content, so the dimmed stale ⚡ could not be expressed
+          // inside the old newline-joined string. `attributes` gets NONE (0)
+          // rather than undefined — the host stores props verbatim and an
+          // undefined would pollute the text buffer's default attributes.
+          return state.lines.map((line) => (
+            <text fg={muted} attributes={line.dim ? DIM_TEXT_ATTRIBUTE : 0}>
+              {line.text}
+            </text>
+          ))
         }}
       </box>
     )

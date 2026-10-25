@@ -413,6 +413,7 @@ function createSessionMetrics(deps) {
   const lastDurations = /* @__PURE__ */ new Map();
   const lastAvgRates = /* @__PURE__ */ new Map();
   const lastExactRates = /* @__PURE__ */ new Map();
+  const lastLiveRates = /* @__PURE__ */ new Map();
   const rates = /* @__PURE__ */ new Map();
   const newRateState = (sessionID) => ({ sessionID, msgs: /* @__PURE__ */ new Map(), samples: [], sessionVocab: false });
   const turnTokens = /* @__PURE__ */ new Map();
@@ -529,6 +530,7 @@ function createSessionMetrics(deps) {
     if (!sessionID) return;
     lastExactRates.delete(sessionID);
     lastAvgRates.delete(sessionID);
+    lastLiveRates.delete(sessionID);
     starts.set(sessionID, Date.now());
     rates.set(sessionID, newRateState(sessionID));
     turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1);
@@ -540,6 +542,7 @@ function createSessionMetrics(deps) {
     if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
       lastExactRates.delete(sessionID);
       lastAvgRates.delete(sessionID);
+      lastLiveRates.delete(sessionID);
       starts.set(sessionID, started);
       rates.set(sessionID, newRateState(sessionID));
       turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1);
@@ -645,6 +648,7 @@ function createSessionMetrics(deps) {
     lastDurations,
     lastAvgRates,
     lastExactRates,
+    lastLiveRates,
     rates,
     rateStateOf
   };
@@ -1170,10 +1174,34 @@ function createSettingsDialog(deps) {
 
 // src/components/sidebar-metrics.tsx
 import { createMemo as createMemo3 } from "solid-js";
+
+// src/live-rate.ts
+function resolveLiveRateReading(memory, sessionID, turnStartedAt, liveTokensPerSecond) {
+  if (liveTokensPerSecond !== void 0) {
+    memory.set(sessionID, { turnStartedAt, tokensPerSecond: liveTokensPerSecond });
+    return { tokensPerSecond: liveTokensPerSecond, dim: false };
+  }
+  const held = memory.get(sessionID);
+  if (held === void 0 || held.turnStartedAt !== turnStartedAt) return void 0;
+  return { tokensPerSecond: held.tokensPerSecond, dim: true };
+}
+
+// src/text-attributes.ts
+var DIM_TEXT_ATTRIBUTE = 1 << 1;
+
+// src/components/sidebar-metrics.tsx
 import { jsx as jsx3, jsxs } from "@opentui/solid/jsx-runtime";
 function createSidebarMetrics(deps) {
   const { context, now } = deps;
-  const { starts, lastDurations, lastAvgRates, lastExactRates, rates, backfillLastTurn } = deps.sessionMetrics;
+  const {
+    starts,
+    lastDurations,
+    lastAvgRates,
+    lastExactRates,
+    lastLiveRates,
+    rates,
+    backfillLastTurn
+  } = deps.sessionMetrics;
   const {
     sidebarMetricsEnabled,
     statsBlockCollapsed,
@@ -1189,7 +1217,7 @@ function createSidebarMetrics(deps) {
     const blockState = createMemo3(() => {
       const currentTime = now();
       const collapsed = statsBlockCollapsed();
-      let metricText = null;
+      const blockLines = [];
       if (!collapsed) {
         let running = false;
         try {
@@ -1198,22 +1226,28 @@ function createSidebarMetrics(deps) {
         }
         const started = starts.get(sessionID);
         const last = lastDurations.get(sessionID);
-        const metricLines = [];
         if (running && started !== void 0) {
-          metricLines.push(`\u23F1 ${format(currentTime - started)}`);
+          blockLines.push({ text: `\u23F1 ${format(currentTime - started)}`, dim: false });
           const rate = rates.get(sessionID);
-          const liveTokPerSec = rate ? liveRate(rate, currentTime) : void 0;
-          if (liveTokPerSec !== void 0) {
-            metricLines.push(`\u26A1 ${Math.round(liveTokPerSec * calibOf(sessionID))} tok/s`);
+          const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : void 0;
+          const reading = resolveLiveRateReading(
+            lastLiveRates,
+            sessionID,
+            started,
+            liveTokensPerSecond === void 0 ? void 0 : Math.round(liveTokensPerSecond * calibOf(sessionID))
+          );
+          if (reading !== void 0) {
+            blockLines.push({ text: `\u26A1 ${reading.tokensPerSecond} tok/s`, dim: reading.dim });
           }
         } else if (running) {
-          metricLines.push("\u23F3");
+          blockLines.push({ text: "\u23F3", dim: false });
         } else if (last !== void 0) {
-          metricLines.push(`\u{1F3C1} ${format(last)}`);
+          blockLines.push({ text: `\u{1F3C1} ${format(last)}`, dim: false });
           const exact = lastExactRates.get(sessionID);
           const avgRate = lastAvgRates.get(sessionID);
-          if (exact !== void 0) metricLines.push(`\u26A1 ${exact} tok/s`);
-          else if (avgRate !== void 0) metricLines.push(`\u26A1 ${avgRate} tok/s avg`);
+          if (exact !== void 0) blockLines.push({ text: `\u26A1 ${exact} tok/s`, dim: false });
+          else if (avgRate !== void 0)
+            blockLines.push({ text: `\u26A1 ${avgRate} tok/s avg`, dim: false });
         }
         const stats = todayStats();
         const hitScope = hitScopeEnabled();
@@ -1224,9 +1258,10 @@ function createSidebarMetrics(deps) {
           const freshTokensTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
           const cacheInclusiveTotal = freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0);
           if (freshTokensTotal > 0) {
-            metricLines.push(
-              cacheInclusiveTotal > freshTokensTotal ? `\u{1F4CA} ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})` : `\u{1F4CA} ${fmtNum(freshTokensTotal)} (${totalScope})`
-            );
+            blockLines.push({
+              text: cacheInclusiveTotal > freshTokensTotal ? `\u{1F4CA} ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})` : `\u{1F4CA} ${fmtNum(freshTokensTotal)} (${totalScope})`,
+              dim: false
+            });
           }
         }
         if (hitScope === "session") {
@@ -1238,22 +1273,24 @@ function createSidebarMetrics(deps) {
               sessionTokens?.cache?.write ?? 0
             );
             if (sessionRatio !== void 0)
-              metricLines.push(`\u{1F3AF} ${(sessionRatio * 100).toFixed(1)}% (session)`);
+              blockLines.push({
+                text: `\u{1F3AF} ${(sessionRatio * 100).toFixed(1)}% (session)`,
+                dim: false
+              });
           } catch {
           }
         } else if (stats) {
           const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0);
           if (dailyRatio !== void 0)
-            metricLines.push(`\u{1F3AF} ${(dailyRatio * 100).toFixed(1)}% (today)`);
+            blockLines.push({ text: `\u{1F3AF} ${(dailyRatio * 100).toFixed(1)}% (today)`, dim: false });
         }
-        metricText = metricLines.length > 0 ? metricLines.join("\n") : null;
       }
-      return { collapsed, metricText };
+      return { collapsed, lines: blockLines };
     });
     const hasContent = createMemo3(() => {
       if (!sidebarMetricsEnabled()) return false;
       const state = blockState();
-      return state.collapsed || state.metricText !== null;
+      return state.collapsed || state.lines.length > 0;
     });
     const base = context.theme?.text?.base;
     const muted = context.theme?.text?.muted;
@@ -1276,7 +1313,9 @@ function createSidebarMetrics(deps) {
       },
       () => {
         if (!hasContent()) return null;
-        return blockState().collapsed ? null : /* @__PURE__ */ jsx3("text", { fg: muted, children: () => blockState().metricText });
+        const state = blockState();
+        if (state.collapsed) return null;
+        return state.lines.map((line) => /* @__PURE__ */ jsx3("text", { fg: muted, attributes: line.dim ? DIM_TEXT_ATTRIBUTE : 0, children: line.text }));
       }
     ] });
   };
@@ -1305,14 +1344,20 @@ var coalesceFooterRuns = (segments) => {
 
 // src/components/footer-status.tsx
 import { jsx as jsx4 } from "@opentui/solid/jsx-runtime";
-var DIM_TEXT_ATTRIBUTE = 1 << 1;
 function createFooterStatus(deps) {
   const { context, now } = deps;
-  const { starts, lastDurations, lastAvgRates, lastExactRates, rates, backfillLastTurn } = deps.sessionMetrics;
+  const {
+    starts,
+    lastDurations,
+    lastAvgRates,
+    lastExactRates,
+    lastLiveRates,
+    rates,
+    backfillLastTurn
+  } = deps.sessionMetrics;
   const { hitScopeEnabled, totalScopeEnabled, footerHitEnabled, footerSigmaEnabled } = deps.settings;
   const { todayStats, totalFor } = deps.statsSource;
   const { calibOf } = deps.calibration;
-  const lastLiveRates = /* @__PURE__ */ new Map();
   const FooterStatus = (componentProps) => {
     const slotProps = componentProps.slotProps;
     let sessionID;
@@ -1336,16 +1381,17 @@ function createFooterStatus(deps) {
       if (running && started !== void 0) {
         parts.push({ text: `\u23F1 ${format(currentTime - started)}` });
         const rate = rates.get(sessionID);
-        const tps = rate ? liveRate(rate, currentTime) : void 0;
-        if (tps !== void 0) {
-          const tokensPerSecond = Math.round(tps * calibOf(sessionID));
-          lastLiveRates.set(sessionID, { turnStartedAt: started, tokensPerSecond });
-          parts.push({ text: `\u26A1 ${tokensPerSecond} tok/s` });
-        } else {
-          const memory = lastLiveRates.get(sessionID);
-          if (memory !== void 0 && memory.turnStartedAt === started) {
-            parts.push({ text: `\u26A1 ${memory.tokensPerSecond} tok/s`, dim: true });
-          }
+        const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : void 0;
+        const reading = resolveLiveRateReading(
+          lastLiveRates,
+          sessionID,
+          started,
+          liveTokensPerSecond === void 0 ? void 0 : Math.round(liveTokensPerSecond * calibOf(sessionID))
+        );
+        if (reading !== void 0) {
+          const segment = { text: `\u26A1 ${reading.tokensPerSecond} tok/s` };
+          if (reading.dim) segment.dim = true;
+          parts.push(segment);
         }
       } else if (running) {
         parts.push({ text: `\u23F3` });

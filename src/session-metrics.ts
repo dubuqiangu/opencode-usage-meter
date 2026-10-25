@@ -29,6 +29,7 @@ export type SessionMetricsApi = {
   lastDurations: Map<string, number>
   lastAvgRates: Map<string, number>
   lastExactRates: Map<string, number>
+  lastLiveRates: Map<string, { turnStartedAt: number; tokensPerSecond: number }>
   rates: Map<string, RateState>
   rateStateOf: (sessionID: string) => RateState | undefined
 }
@@ -47,6 +48,10 @@ export function createSessionMetrics(deps: {
   // v0.6.2: exact per-message generation rate (output+reasoning over the
   // message's own created→completed span) — replaces the heuristic idle avg.
   const lastExactRates = new Map<string, number>()
+  // v0.7.37: last LIVE tok/s reading per session, shared by the footer row
+  // and the right-sidebar block. One entry per session for the plugin
+  // instance's lifetime (session-count magnitude, no host handles).
+  const lastLiveRates = new Map<string, { turnStartedAt: number; tokensPerSecond: number }>()
 
   // Token-flow tracking per session, active only during a run.
   const rates = new Map<string, RateState>()
@@ -260,6 +265,9 @@ export function createSessionMetrics(deps: {
     // cannot produce a rate show no ⚡ at all, which is the honest outcome.
     lastExactRates.delete(sessionID)
     lastAvgRates.delete(sessionID)
+    // v0.7.37: the live memory belongs to the turn, not the session — clear it
+    // on a new turn so the first idle tick of the new turn has nothing to hold.
+    lastLiveRates.delete(sessionID)
     starts.set(sessionID, Date.now())
     rates.set(sessionID, newRateState(sessionID))
     turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1)
@@ -273,6 +281,9 @@ export function createSessionMetrics(deps: {
     if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
       lastExactRates.delete(sessionID)
       lastAvgRates.delete(sessionID)
+      // v0.7.37: same as onExecutionStarted — a recovered turn start must not
+      // inherit a live reading stamped by an earlier turn.
+      lastLiveRates.delete(sessionID)
       starts.set(sessionID, started)
       rates.set(sessionID, newRateState(sessionID))
       turnTokens.set(sessionID, (turnTokens.get(sessionID) ?? 0) + 1)
@@ -409,6 +420,7 @@ export function createSessionMetrics(deps: {
     lastDurations,
     lastAvgRates,
     lastExactRates,
+    lastLiveRates,
     rates,
     rateStateOf,
   }

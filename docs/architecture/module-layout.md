@@ -11,6 +11,9 @@ src/
   settings.ts        /usage-settings 持久化设置 + 归一读取器/开关
   stats-source.ts    日级统计拉取/防抖刷新/跨零点/重试
   session-metrics.ts 每会话运行时状态 + session.*/message.* 事件处理
+  footer-runs.ts     footer 行按色调合并(纯函数,可被 Node 测试加载)
+  live-rate.ts       ⚡ 共享判定:保留本轮上次读数 + 淡化标记(供 footer 与右栏)
+  text-attributes.ts 内联的 DIM 属性位(避免 src 导入 @opentui/core)
   panel-content.ts   /usage-full 面板文本构建(窗口/本会话/子代理/明细)
   components/
     footer-status.tsx     prompt.footer.status 状态行组件
