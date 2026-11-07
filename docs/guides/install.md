@@ -8,7 +8,7 @@
 
 | 依赖 | 要求 | 检查命令 | 期望输出 |
 |---|---|---|---|
-| OpenCode | **V2 及以上**(实测基准 `v2.2.5`) | `opencode --version` | 版本号 ≥ 2 |
+| OpenCode | **V2 及以上**(本文撰写时实测基准 `v2.2.5`) | `opencode --version` | 版本号 ≥ 2 |
 | Node.js | **≥ 22** | `node --version` | `v22.x` 或更高 |
 | PowerShell | **7+**(命令为 `pwsh`;Windows 自带的是 5.x,`pwsh` 通常需另装) | `pwsh --version` | `PowerShell 7.x` |
 | git | 任意近期版本(`plugin add github:` 依赖 git 拉取) | `git --version` | `git version 2.x` |
@@ -55,13 +55,13 @@ git clone https://github.com/dubuqiangu/opencode-usage-meter.git "$env:USERPROFI
 
 ### 2b. 在配置里指定本地路径
 
-编辑 `$env:USERPROFILE\.config\opencode\opencode.json`,在顶层 `plugins` 数组里加入本仓库的**绝对路径**(Windows 的 `file://` 是**三斜杠 + 盘符 + 正斜杠**,例如 `file:///D:/workSpace/...`):
+编辑 `$env:USERPROFILE\.config\opencode\opencode.json`,在顶层 `plugins` 数组里加入本仓库的**绝对路径**(Windows 的 `file://` 是**三斜杠 + 盘符 + 正斜杠**,形如 `file:///C:/path/to/...`);**把下面示例里的路径换成你自己的仓库位置**:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "file:///D:/workSpace/python/aicode/opencode/opencode-usage-meter"
+    "file:///C:/path/to/opencode-usage-meter"
   ]
 }
 ```
@@ -78,13 +78,13 @@ opencode plugin update github:dubuqiangu/opencode-usage-meter; opencode service 
 
 **期望输出**:命令不报错;`service restart` 正常退出。**更新后必须完整重启 TUI**(见第 6 步),否则运行中的宿主仍持旧代码——表现为计时冻结、tok/s 停更。
 
-> 版本号只用平铺 semver(如 `0.7.38`);带 `-probe` 之类预发布后缀会让 `plugin update` 挂起,补丁位正常推进即可。
+> 版本号只用平铺 semver(如 `0.7.39`);带 `-probe` 之类预发布后缀会让 `plugin update` 挂起,补丁位正常推进即可。
 
 ---
 
 ## 4. 普通用户:如何确认装好 / 装的是什么版本
 
-**不要依赖 `opencode plugin list`**:在部分 CLI 版本(实测基准 v2.2.5)上,它对 `github:` 插件会输出 `No plugins found`,即使插件已正确注册。请用下面两个可靠方法。
+**不要依赖 `opencode plugin list`**:在部分 CLI 版本(本文撰写时实测基准 v2.2.5)上,它对 `github:` 插件会输出 `No plugins found`,即使插件已正确注册。请用下面两个可靠方法。
 
 ### 4a. 读已安装包的版本(最可靠)
 
@@ -98,7 +98,9 @@ $dir = Get-ChildItem "$env:USERPROFILE\.cache\opencode\npm" -Directory -Filter "
 (Get-Content $dir -Raw -Encoding UTF8 | ConvertFrom-Json).version
 ```
 
-**期望输出**:一个版本号,如 `0.7.38`。装完/更新后它应与目标版本一致。
+**期望输出**:一个版本号,如 `0.7.39`。装完/更新后它应与目标版本一致。
+
+> **兜底**:若上面的 `$dir` 为空、或该目录/文件不存在,`Get-Content` 会报错——说明**未安装成功**,回到第 1 步重新安装。
 
 ### 4b. 确认宿主配置里已注册
 

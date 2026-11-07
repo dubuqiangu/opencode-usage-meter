@@ -1,6 +1,6 @@
 # 运行时问题取证记录
 
-真实环境暴露的问题、根因取证与修复。取证基准:anomalyco/opencode v2.0.21 源码(`packages/client/src/effect/api/api.ts` 等)。
+真实环境暴露的问题、根因取证与修复。取证基准:anomalyco/opencode v2.0.21 源码(`packages/client/src/effect/api/api.ts` 等);此为**历史实证基准**,与 [install.md](../guides/install.md) 的安装实测基准(v2.2.5,本文撰写时)是用途不同的两个版本号。
 
 ## 0.6.4:stats 客户端路径 / keymap 作用域(首次真机验证暴露)
 

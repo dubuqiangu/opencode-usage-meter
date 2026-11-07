@@ -47,7 +47,7 @@ opencode plugin add github:dubuqiangu/opencode-usage-meter
 
 - TUI 入口投递为**预编译单文件**:0.7.25 起必须 `npm run build:tui` 重建并提交 `dist/tui.js`(宿主只对入口级裸导入提供运行时模块,裸 TSX 多文件形态 stage=load 解析失败;机制见 [docs/guides/tui-plugin-pitfalls.md](docs/guides/tui-plugin-pitfalls.md) 避坑 #16)
 - 改动后 esbuild 语法校验(命令见 [docs/architecture/overview.md](docs/architecture/overview.md));单元测试:`npm test`(test/ 目录,纯函数与 factory 层)
-- 模块结构(src/ 现 18 个文件;0.7.2 起按功能拆分)→ [docs/architecture/module-layout.md](docs/architecture/module-layout.md)
+- 模块结构(src/ 现 22 个文件;0.7.2 起按功能拆分)→ [docs/architecture/module-layout.md](docs/architecture/module-layout.md)
 
 ## 许可
 

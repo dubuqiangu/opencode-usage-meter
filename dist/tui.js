@@ -694,6 +694,54 @@ var dailyHitRatio = (cacheRead, input) => {
   return denominator > 0 ? cacheRead / denominator : void 0;
 };
 
+// src/live-rate.ts
+function liveRateDisplayValue(liveTokensPerSecond, calibrationFactor) {
+  if (liveTokensPerSecond === void 0) return void 0;
+  return Math.max(1, Math.round(liveTokensPerSecond * calibrationFactor));
+}
+function resolveLiveRateReading(memory, sessionID, turnStartedAt, liveTokensPerSecond) {
+  if (liveTokensPerSecond !== void 0) {
+    memory.set(sessionID, { turnStartedAt, tokensPerSecond: liveTokensPerSecond });
+    return { tokensPerSecond: liveTokensPerSecond, dim: false };
+  }
+  const held = memory.get(sessionID);
+  if (held === void 0 || held.turnStartedAt !== turnStartedAt) return void 0;
+  return { tokensPerSecond: held.tokensPerSecond, dim: true };
+}
+
+// src/panel-session-lines.ts
+function composePanelSessionLines(sources) {
+  if (!sources.sessionID) return [];
+  const lines = ["\u2500\u2500 \u5F53\u524D\u4F1A\u8BDD \u2500\u2500"];
+  if (sources.running && sources.started !== void 0) {
+    let line = `  \u23F1 ${format(sources.now - sources.started)}`;
+    const displayedRate = liveRateDisplayValue(
+      sources.liveTokensPerSecond,
+      sources.calibrationFactor
+    );
+    if (displayedRate !== void 0) line += `   \u26A1 ${displayedRate} tok/s`;
+    lines.push(line);
+  } else if (sources.running) {
+    lines.push("  \u23F3");
+  } else if (sources.last !== void 0) {
+    let line = `  \u{1F3C1} ${format(sources.last)}`;
+    if (sources.exactRate !== void 0) {
+      line += `   \u26A1 ${sources.exactRate} tok/s`;
+    } else if (sources.avgRate !== void 0) {
+      line += `   \u26A1 ${sources.avgRate} tok/s avg`;
+    }
+    lines.push(line);
+  } else {
+    lines.push("  (\u7A7A\u95F2)");
+  }
+  if (sources.scopeStats) {
+    const scopeTokens = sources.scopeStats?.tokens;
+    const total = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
+    if (total > 0) lines.push(`  \u03A3 ${TOTAL_SCOPE_LABELS[sources.totalScope]} ${fmtNum(total)}`);
+  }
+  return lines;
+}
+
 // src/session-context.ts
 function currentSessionID(context, slotProps) {
   try {
@@ -867,42 +915,29 @@ function createPanelContent(deps) {
   };
   const sessionLines = (sessionID) => {
     if (!sessionID) return [];
-    const lines = ["\u2500\u2500 \u5F53\u524D\u4F1A\u8BDD \u2500\u2500"];
     const running = isSessionRunning(context, sessionID);
     const started = starts.get(sessionID);
     const last = lastDurations.get(sessionID);
     const currentTime = now();
-    if (running && started !== void 0) {
-      let line = `  \u23F1 ${format(currentTime - started)}`;
-      const rate = rates.get(sessionID);
-      const tps = rate ? liveRate(rate, currentTime) : void 0;
-      if (tps !== void 0) line += `   \u26A1 ${Math.round(tps * calibOf(sessionID))} tok/s`;
-      lines.push(line);
-    } else if (running) {
-      lines.push("  \u23F3");
-    } else if (last !== void 0) {
-      let line = `  \u{1F3C1} ${format(last)}`;
-      const exact = lastExactRates.get(sessionID);
-      if (exact !== void 0) {
-        line += `   \u26A1 ${exact} tok/s`;
-      } else {
-        const avg = lastAvgRates.get(sessionID);
-        if (avg !== void 0) line += `   \u26A1 ${avg} tok/s avg`;
-      }
-      lines.push(line);
-    } else {
-      lines.push("  (\u7A7A\u95F2)");
-    }
+    const rate = rates.get(sessionID);
     const totalScope = totalScopeEnabled();
-    const scopeStats = totalFor(totalScope);
-    if (scopeStats) {
-      const scopeTokens = scopeStats?.tokens;
-      const total = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
-      if (total > 0) lines.push(`  \u03A3 ${TOTAL_SCOPE_LABELS[totalScope]} ${fmtNum(total)}`);
-    }
-    lines.push(...sessionUsageLines(sessionID));
-    lines.push("");
-    return lines;
+    return [
+      ...composePanelSessionLines({
+        sessionID,
+        running,
+        started,
+        last,
+        now: currentTime,
+        liveTokensPerSecond: rate ? liveRate(rate, currentTime) : void 0,
+        calibrationFactor: calibOf(sessionID),
+        exactRate: lastExactRates.get(sessionID),
+        avgRate: lastAvgRates.get(sessionID),
+        totalScope,
+        scopeStats: totalFor(totalScope)
+      }),
+      ...sessionUsageLines(sessionID),
+      ""
+    ];
   };
   const detailLines = (st) => {
     const today = st?.today;
@@ -1190,21 +1225,6 @@ import { createMemo as createMemo3 } from "solid-js";
 
 // src/text-attributes.ts
 var DIM_TEXT_ATTRIBUTE = 1 << 1;
-
-// src/live-rate.ts
-function liveRateDisplayValue(liveTokensPerSecond, calibrationFactor) {
-  if (liveTokensPerSecond === void 0) return void 0;
-  return Math.max(1, Math.round(liveTokensPerSecond * calibrationFactor));
-}
-function resolveLiveRateReading(memory, sessionID, turnStartedAt, liveTokensPerSecond) {
-  if (liveTokensPerSecond !== void 0) {
-    memory.set(sessionID, { turnStartedAt, tokensPerSecond: liveTokensPerSecond });
-    return { tokensPerSecond: liveTokensPerSecond, dim: false };
-  }
-  const held = memory.get(sessionID);
-  if (held === void 0 || held.turnStartedAt !== turnStartedAt) return void 0;
-  return { tokensPerSecond: held.tokensPerSecond, dim: true };
-}
 
 // src/sidebar-block.ts
 function composeSidebarBlock(sources) {

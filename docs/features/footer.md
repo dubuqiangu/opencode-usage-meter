@@ -2,7 +2,7 @@
 
 挂载点:`prompt.footer.status`(append 模式,不覆盖原生状态行)。当前会话的实时读数,随 500ms 时钟跳动。
 
-> **刷新机制(0.7.8 → 0.7.12 三环链路定版)**:整行文本在 `createMemo` 内计算(0.7.8);槽位渲染层经**函数子节点**包裹(`<box>{() => <FooterStatus/>}</box>`,0.7.12;组件内插值 `<text>{() => statusText()}</text>`,0.7.10),落入被跟踪的 render effect——signal 变化直接驱动重绘,不依赖宿主重挂;500ms tick 每次显式 `requestRender()` 上屏(0.7.11,宿主按需绘制,renderable 树更新本身不刷屏)。0.7.7 及以前所有段落都在组件函数体内预计算,函数体每次挂载只跑一次,刷新全靠宿主高频重绘 footer 掩盖。0.7.36 补最后一处同类盲区:组件体里的"空态早返回门"(`if (statusText() === null) return null`)已删,空态判定移入子 thunk——`createComponent` 的 untrack 使早返回成为永久快照,footer 首帧早于首轮时整行会一直空白,直到宿主重挂 footer slot。
+> **刷新机制(0.7.8 → 0.7.12 三环链路定版)**:整行文本在 `createMemo` 内计算(0.7.8);槽位渲染层经**函数子节点**包裹(`<box>{() => <FooterStatus/>}</box>`,0.7.12;组件内插值 `<text>{() => statusText()}</text>`,0.7.10),落入被跟踪的 render effect——signal 变化直接驱动重绘,不依赖宿主重挂;500ms tick 每次显式 `requestRender()` 上屏(0.7.11,宿主按需绘制,renderable 树更新本身不刷屏)。0.7.7 及以前所有段落都在组件函数体内预计算,函数体每次挂载只跑一次,刷新全靠宿主高频重绘 footer 掩盖。0.7.36 补组件体里的"空态早返回门"(`if (statusText() === null) return null`)盲区:该早返回在 `createComponent` 的 untrack 下成为永久快照,footer 首帧早于首轮时整行会一直空白,直到宿主重挂 footer slot;已删,空态判定移入子 thunk。0.7.38 的 **B3** 又补上 footer 组件体里同类的一处 `sessionID` 早返回门——null 判定下移到子 memo,组件体常驻 `<box>`,首帧无 session 也能随 500ms tick 自愈。
 
 ## 状态与图标(0.7.3 起全图标化)
 
@@ -15,6 +15,7 @@
 
 - 计时每 500ms 跳动;<60s 显示一位小数(`17.5s`),对齐原生精度风格
 - 空闲速率 = `Σ(output+reasoning) ÷ Σ(created→completed)`,与原生统计同口径;无精确值时回退启发式 avg 并标注 `avg`
+- **实时速率下限(0.7.38 B2)**:live(运行中滑窗)速率取整后下限抬到 `1`(`Math.max(1, Math.round(...))`),低速率时不再显示 `⚡ 0 tok/s`;仅作用于两个 live 路径,空闲 ⚡ 的精确 / avg 值不受影响
 - **冷启动回填(0.7.5)**:本 TUI 实例内尚无记录的会话(重开终端接手的旧会话),首次渲染时从已同步消息记录回放上一轮,`🏁/⚡` 立即可见——实时记录优先不覆盖、运行中不写、末条消息未完成不显示旧值(详见 [events-and-state.md](../architecture/events-and-state.md))
 - **淡化速率(0.7.35)**:`liveRate()` 返回空(4s 无新样本 / 样本不足 2 / 增长为 0)时,若**本轮**曾有过实时读数,则继续显示该数值并以 `TextAttributes.DIM`(SGR 2,数值 `1 << 1`)淡化。记忆按「会话 + 本轮 starting 时间戳」双键,跨轮不串值;本轮尚无读数的头几百毫秒与重启后仍按原样省略该段。渲染结构随之从单个 `<text>` 改为「每个色块一个 `<text>`」的横向 box(同一 `<text>` 只能承载一个 fg 与一套属性)
 

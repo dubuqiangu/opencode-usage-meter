@@ -1,6 +1,6 @@
 # 代码模块结构(0.7.2 拆分)
 
-入口只做组装,按功能维度解耦;单文件超过 ~400 行或职责混杂即拆,改一处功能只碰一个文件。src/ 现共 **18 个文件**(tui 入口 + index 服务端占位 + 12 个功能模块 + 4 个 UI 组件)。
+入口只做组装,按功能维度解耦;单文件超过 ~400 行或职责混杂即拆,改一处功能只碰一个文件。src/ 现共 **23 个文件**(tui 入口 + index 服务端占位 + 17 个功能模块 + 4 个 UI 组件)。
 
 ```
 src/
@@ -18,6 +18,11 @@ src/
   reactive-mount.ts  槽位响应式挂载(createElement box + 插件图内 insert,0.7.22/0.7.24)
   text-attributes.ts 内联的 DIM 属性位(避免 src 导入 @opentui/core)
   panel-content.ts   /usage-full 面板文本构建(窗口/本会话/子代理/明细)
+  panel-session-lines.ts 面板头部 ⏱/⏳/🏁/Σ 组装纯函数(composePanelSessionLines,0.7.39;从 panel-content 提取)
+  sidebar-block.ts   右栏块可见性/组装纯函数(shouldShowSidebarBlock / composeSidebarBlock,0.7.38)
+  layer-lifecycle.ts keymap layer 创建退避与释放纯函数(shouldAttemptLayerCreate / createDisposableLayer,0.7.38)
+  session-context.ts 会话上下文访问器(currentSessionID / isSessionRunning,0.7.38)
+  durable-store.ts   耐久 store 打开封装(openStore,0.7.38)
   components/
     footer-status.tsx     prompt.footer.status 状态行组件
     sidebar-metrics.tsx   右栏 Stats 块组件
@@ -25,7 +30,7 @@ src/
     settings-dialog.tsx   /usage-settings 弹窗组件
 ```
 
-> reactive-mount(0.7.22 引入,0.7.24 定为 OMO `reactiveElement` 同款)与 hit-rate(0.7.27 提取)是 0.7.2 拆分之后新增的模块。
+> reactive-mount(0.7.22 引入,0.7.24 定为 OMO `reactiveElement` 同款)与 hit-rate(0.7.27 提取)是 0.7.2 拆分之后新增的模块;0.7.38 又提取 4 个纯函数模块(sidebar-block / layer-lifecycle / session-context / durable-store,提纯重构,行为零变化)。
 
 ## 模块接口(factory 模式)
 
@@ -42,9 +47,16 @@ setup 内的闭包状态拆为各 factory,依赖显式注入:
 
 `tui.tsx` 按原顺序创建工厂、注册事件与 slot、组装清理函数——**行为零变化**的纯结构调整。
 
+0.7.38 提纯出的 4 个纯函数模块(被 `.tsx` 组件调用,行为零变化):
+
+- `sidebar-block.ts` — 右栏块可见性与组装:导出 `shouldShowSidebarBlock`(可见性判定)、`composeSidebarBlock`(按状态组装块内容)
+- `layer-lifecycle.ts` — keymap layer 生命周期:导出 `shouldAttemptLayerCreate`(5s 退避重试判定)、`createDisposableLayer`(创建并登记释放)
+- `session-context.ts` — 会话上下文访问:导出 `currentSessionID`(当前会话 id)、`isSessionRunning`(运行中判定)
+- `durable-store.ts` — 耐久 store 打开:导出 `openStore`(统一打开 + 失败日志去重,见 [known-issues.md](../decisions/known-issues.md))
+
 ## 单元测试(test/,0.7.4 起)
 
-零 devDependency:Node ≥ 22 原生 type stripping + `node:test`;`npm test` 执行。共 **12 个文件**(11 个 `*.test.ts` + 解析钩子 `test-loader.mjs`)。
+零 devDependency:Node ≥ 22 原生 type stripping + `node:test`;`npm test` 执行。共 **17 个文件**(16 个 `*.test.ts` + 解析钩子 `test-loader.mjs`)。
 
 ```
 test/
@@ -56,9 +68,14 @@ test/
   stats-source.test.ts       number 入参契约、信封解包、防抖与 30s 重试独立(0.7.6)、在途切维度补抓(0.7.33)、15s 超时
   session-metrics.test.ts    轮次生命周期:启动/delta/精确采纳/防双计锁/空闲精确速率结算/冷启动回填(含三重防护)/新轮清值(0.7.36)
   panel-content.test.ts      ensureDetail 正常路径与 15s 超时降级(0.7.26)
+  panel-session-lines.test.ts 面板头部组装纯函数 composePanelSessionLines(0.7.39)
   hit-rate.test.ts           日级 / 会话严格口径公式与显示舍入(0.7.27)
   live-rate.test.ts          保留上次实时读数 + 淡化判定(0.7.37)
   footer-runs.test.ts        footer 行按色调合并纯函数(0.7.35)
+  sidebar-block.test.ts      右栏块可见性/组装纯函数(0.7.38)
+  layer-lifecycle.test.ts    keymap layer 创建退避/释放纯函数(0.7.38)
+  session-context.test.ts    会话上下文访问器(currentSessionID / isSessionRunning,0.7.38)
+  durable-store.test.ts      openStore 打开/去重与失败降级(0.7.38)
   delivery-contract.test.ts  发布形态契约:package.json / dist 产物 / src 姿势 / staleness 哨兵(0.7.25)
 ```
 

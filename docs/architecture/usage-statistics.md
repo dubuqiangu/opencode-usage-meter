@@ -15,9 +15,9 @@
 
 `GET /api/experimental/session/stats`(operationId `experimental.session.stats`)。
 
-**关键参数格式(实测)**:`from`/`to` 为 epoch 毫秒 **number**(v2.0.21 SDK `SessionStatsInput` 要求,字符串会被 effect schema 拒绝);`timezone` 传本地 IANA 时区名(影响 `activity[].date` 的日切归属);`project` 可选,缺省全局。响应:`tokens{input,output,reasoning,cache{read,write}}`、`cost`、`models[]`、`activity[]`、`sessions/steps/activeDays/streak`。
+**关键参数格式(实测)**:`from`/`to` 为 epoch 毫秒 **number**(历史实证基准 v2.0.21 SDK `SessionStatsInput` 要求,字符串会被 effect schema 拒绝);`timezone` 传本地 IANA 时区名(影响 `activity[].date` 的日切归属);`project` 可选,缺省全局。响应:`tokens{input,output,reasoning,cache{read,write}}`、`cost`、`models[]`、`activity[]`、`sessions/steps/activeDays/streak`。
 
-**客户端路径**(0.6.4 取证):openapi operationId 为 `experimental.session.stats`,但 v2.0.x effect 客户端实际挂在 **`SessionApi`**(`context.client.session.stats`);实现按候选路径数组 `[client.session.stats, client.experimental.session.stats]` 依次探测,兼容未来迁移。
+**客户端路径**(0.6.4 取证,历史实证基准 v2.0.x):openapi operationId 为 `experimental.session.stats`,但 v2.0.x effect 客户端实际挂在 **`SessionApi`**(`context.client.session.stats`);实现按候选路径数组 `[client.session.stats, client.experimental.session.stats]` 依次探测,兼容未来迁移。
 
 ## 展示与刷新
 

@@ -2,11 +2,11 @@
 // header, the current-window / cumulative / subagent blocks, and the daily +
 // all-time detail tables. Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createSignal } from "solid-js"
-import { fmtNum, fmtUSD, format } from "./format"
+import { fmtNum, fmtUSD } from "./format"
 import { dailyHitRatio, sessionHitRatio } from "./hit-rate"
+import { composePanelSessionLines } from "./panel-session-lines"
 import { liveRate } from "./rate-model"
 import { isSessionRunning } from "./session-context"
-import { TOTAL_SCOPE_LABELS } from "./settings"
 import type { CalibrationApi } from "./calibration"
 import type { SessionMetricsApi } from "./session-metrics"
 import type { SettingsApi } from "./settings"
@@ -228,9 +228,12 @@ export function createPanelContent(deps: {
   }
 
   // Live per-session readout (timer / tok/s / today Σ) for the panel header.
+  // v0.7.39: the branch selection moved to panel-session-lines.ts (pure, unit
+  // testable); this wrapper gathers the host/signal values and appends the
+  // session usage block. The live ⚡ now shares liveRateDisplayValue() with the
+  // footer/sidebar (B2 completion).
   const sessionLines = (sessionID: string | undefined): string[] => {
     if (!sessionID) return []
-    const lines: string[] = ["── 当前会话 ──"]
     // 0.7.21: wrap the host status() read — see session-context.ts; a
     // throwing client degrades to "not running" instead of breaking the
     // panel header build.
@@ -238,39 +241,25 @@ export function createPanelContent(deps: {
     const started = starts.get(sessionID)
     const last = lastDurations.get(sessionID)
     const currentTime = now()
-    if (running && started !== undefined) {
-      let line = `  ⏱ ${format(currentTime - started)}`
-      const rate = rates.get(sessionID)
-      const tps = rate ? liveRate(rate, currentTime) : undefined
-      if (tps !== undefined) line += `   ⚡ ${Math.round(tps * calibOf(sessionID))} tok/s`
-      lines.push(line)
-    } else if (running) {
-      lines.push("  ⏳")
-    } else if (last !== undefined) {
-      let line = `  🏁 ${format(last)}`
-      const exact = lastExactRates.get(sessionID)
-      if (exact !== undefined) {
-        line += `   ⚡ ${exact} tok/s`
-      } else {
-        const avg = lastAvgRates.get(sessionID)
-        if (avg !== undefined) line += `   ⚡ ${avg} tok/s avg`
-      }
-      lines.push(line)
-    } else {
-      lines.push("  (空闲)")
-    }
-    // v0.7.7: the panel-header Σ follows the persisted total scope.
+    const rate = rates.get(sessionID)
     const totalScope = totalScopeEnabled()
-    const scopeStats = totalFor(totalScope)
-    if (scopeStats) {
-      const scopeTokens = scopeStats?.tokens
-      const total =
-        (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
-      if (total > 0) lines.push(`  Σ ${TOTAL_SCOPE_LABELS[totalScope]} ${fmtNum(total)}`)
-    }
-    lines.push(...sessionUsageLines(sessionID))
-    lines.push("")
-    return lines
+    return [
+      ...composePanelSessionLines({
+        sessionID,
+        running,
+        started,
+        last,
+        now: currentTime,
+        liveTokensPerSecond: rate ? liveRate(rate, currentTime) : undefined,
+        calibrationFactor: calibOf(sessionID),
+        exactRate: lastExactRates.get(sessionID),
+        avgRate: lastAvgRates.get(sessionID),
+        totalScope,
+        scopeStats: totalFor(totalScope),
+      }),
+      ...sessionUsageLines(sessionID),
+      "",
+    ]
   }
 
   const detailLines = (st: any): string[] => {

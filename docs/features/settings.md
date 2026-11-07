@@ -22,7 +22,7 @@
 
 ## 为什么走"命令 + storage"而非配置文件
 
-v2.0.21 宿主无插件 options 配置通道(dev 的 `{package, options}` 不回传插件,已取证),故配置经命令修改 + storage 持久化自洽。宿主就绪后可加配置文件直读,见 [roadmap.md](../decisions/roadmap.md)。
+历史实证基准 v2.0.21 宿主无插件 options 配置通道(dev 的 `{package, options}` 不回传插件,已取证),故配置经命令修改 + storage 持久化自洽。宿主就绪后可加配置文件直读,见 [roadmap.md](../decisions/roadmap.md)。
 
 ## 兜底
 

@@ -56,10 +56,12 @@
 - stats 端点带 `experimental`,OpenCode 升级可能变动 → 全部调用收敛在 `statsCall()` 单函数,便于替换
 - client 方法路径依赖宿主版本 → 防御式候选路径探测,运行时验证
 - 全量查询 `models[]` 可能上百行(探活/失败请求 tokens 为 0)→ 按输出过滤排序,只显示 Top 5
-- **`panel.open` 宿主假设(0.7.12 #6 修复的有意权衡,备查)**:`/usage-full` 按 `ui.panel.open` 返回 **boolean** 语义判断成败(`!== true` 即降级弹窗);若未来宿主改为返回 Promise(异步 open)或其他非 true 对象,命令会误入弹窗降级、出现"面板 + 弹窗双表面"。当前实证宿主(v2.0.21)返回 boolean;如遇异步宿主需改为 await/then 链
+- **`panel.open` 宿主假设(0.7.12 #6 修复的有意权衡,备查)**:`/usage-full` 按 `ui.panel.open` 返回 **boolean** 语义判断成败(`!== true` 即降级弹窗);若未来宿主改为返回 Promise(异步 open)或其他非 true 对象,命令会误入弹窗降级、出现"面板 + 弹窗双表面"。历史实证基准宿主 v2.0.21 返回 boolean;如遇异步宿主需改为 await/then 链
 - **`void updateSettingsStore(...)` promise 拒绝未挂 catch(0.7.29 已修)**:0.7.29 起 `settings.ts` 三处 toggle 与 `calibration.ts` 的持久化写均已链 `.catch(console.error)`,宿主 storage 写失败不再产生 unhandledRejection 噪音。本条留作历史记录
 - **热重载生命周期(0.7.3 真机实证)**:`plugin update` 只改磁盘包,运行中宿主仍持旧代码;`/reload` 拆掉旧实例定时器与订阅但不从磁盘重载插件——表现为计时冻结、tok/s 停更。**更新后必须完整重启 TUI**
 - **`.tsx` 组件无单测覆盖(0.7.36 审视)**:`test/test-loader.mjs` 只补 `.ts` 解析,`footer-status.tsx` / `sidebar-metrics.tsx` 里的门与渲染逻辑无法被现有近百例用例加载(数字随测试增长,不再写死);0.7.36 修掉的两个"挂载期早返回门"因此活过了 0.7.8→0.7.35 多轮真机验收。当前回归手段是 `@opentui/solid` 渲染探针(临时脚本,不入库)
+
+**无类型检查闸门(0.7.39 评估)**:构建与测试都**只擦类型**——`npm run build:tui` 走 esbuild、`npm test` 走 Node ≥22 原生 type stripping,`package.json` 无 `tsc` 步骤;`tsconfig.json` 虽有 `strict` 但无任何流程执行它。评估把 `tsc --noEmit` 加入 `npm test` 作闸门:报 **129 条结构性错误**(缺 `@types/node`、无 `JSX.IntrinsicElements`、宿主包 `solid-js`/`@opentui/solid` 无类型声明等),需补类型桩 + 调整 tsconfig,故**暂不作为闸门**(以免测试变红)。后果:`.tsx` 的参数顺序 / 类型回归可同时骗过 build 与测试,列为后续改进项。
 
 **未取证的宿主语义(0.7.36 全量审视;插件侧无法证明,结论按此假设成立)**:
 
@@ -75,6 +77,8 @@
 
 **有意行为差异(0.7.38,log-only)**:`openStore` 去重(提纯)带来两处**日志层面**的有意变化,均为**有意的日志一致性统一**、非用户可见输出(插件 `console` 不进宿主日志):① calibration 的 storage store 初始化失败由「完全静默」变为「记录一次」;② settings 的失败文案由 `settings will not persist` 变为 `usage-meter.settings will not persist`。二者皆为有意,勿当回归排查。
 
+**面板 ⚡ 不参与 hold+dim(0.7.39 登记,有意轻量差异)**:工具间隙 / 4s 无流导致 `liveRate()` 返回空时,`/usage-full` 面板头部的 ⚡ **整段消失**,而 footer 与右栏按 0.7.37 契约**保留本轮上次读数并以 DIM 淡化**——三个表面的实时 ⚡ 显示行为不完全一致:数值口径 0.7.39 起已统一(取整下限 1),但"间隙期保留并淡化"仅 footer / 右栏有。面板头部空间与语义偏"当前读数",故属有意的轻量差异,不做统一。
+
 **刻意不改项(0.7.36 审视结论,避免后续重复排查)**:
 
 - `fetchToday` 在 `statsBusy` 时丢弃刷新(与 0.7.33 修过的 `fetchRange` 不同):60s tick 自愈,无数据丢失
@@ -83,4 +87,5 @@
 - `statsSource.release()` 不取消在飞请求、不清 `panelRefresh`:teardown 后最多多写一次只读结果
 - `reactive-mount` 的 `dispose` / `release` 为空实现:正常路径已由宿主 computation 的 dispose 覆盖(探针实证旧 box children 1→0 且脱离父节点);"宿主注销 slot 但保留节点"未观测到
 - `lastDurations` / `lastExactRates` / `lastAvgRates` / `backfillLastAttemptAt` 的 per-session Map 终身增长:与 `sessionModels` / `syncedChildren` 同性质(会话数量级、零宿主句柄)
+- `turnTokens`(`session-metrics.ts`)在轮次结束后**不被清理**:与 `sessionModels` / `syncedChildren` / `lastLiveRates` 同性质(会话数量级、零宿主句柄),属可接受但需登记的终身增长
 - `backfillLastTurn` 成功路径会第二次调用 `message.list`:冗余但已被测试锁定,无正确性问题

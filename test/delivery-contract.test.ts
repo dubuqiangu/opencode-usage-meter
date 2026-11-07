@@ -31,11 +31,11 @@ const distEntryPath = join(repoRoot, "dist", "tui.js")
 const readUtf8 = (path: string): string => readFileSync(path, "utf8")
 
 // Comment-free source so prose mentions of imports/createRoot in doc blocks
-// do not trigger the posture checks below.
-const stripComments = (source: string): string =>
-  source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "")
+// do not trigger the posture checks below. The single implementation is the
+// string-aware state machine (stripComponentComments) further down — the old
+// regex version stripped block comments first, so a `//` comment mentioning a
+// path like `sidebar/*)` opened a phantom block comment and silently swallowed
+// most of sidebar-metrics.tsx, disabling the posture checks for that file.
 
 // Bare specifiers the host serves to plugin TUI code as runtime modules.
 // Anything outside this set must resolve on disk or be bundled.
@@ -169,7 +169,7 @@ test("dist/tui.js: no machine-local path leakage inside the bundle", () => {
 
 test("src: every non-relative import is a bare host-provided specifier (no dist subpaths)", () => {
   for (const sourcePath of listSourceFiles(srcRoot)) {
-    const strippedSource = stripComments(readUtf8(sourcePath))
+    const strippedSource = stripComponentComments(readUtf8(sourcePath))
     for (const specifier of collectImportSpecifiers(strippedSource)) {
       if (specifier.startsWith(".") || specifier.startsWith("/")) continue
       assert.ok(
@@ -195,7 +195,7 @@ test("src: every .tsx file declares the @opentui/solid jsxImportSource pragma on
 
 test("src: no createRoot call anywhere (ambient OMO mount is the settled posture)", () => {
   for (const sourcePath of listSourceFiles(srcRoot)) {
-    const strippedSource = stripComments(readUtf8(sourcePath))
+    const strippedSource = stripComponentComments(readUtf8(sourcePath))
     assert.ok(
       !/createRoot\s*\(/.test(strippedSource),
       `${sourcePath} calls createRoot — detached roots lose RendererContext ` +
@@ -237,12 +237,12 @@ test("dist/tui.js is byte-identical to a rebuild via the package build script", 
 // component source. These assert structure, not formatting: the regexes stay
 // loose enough to survive unrelated refactors.
 
-// Comment stripper for the component assertions below. It differs from the
-// shared stripComments() on purpose: it consumes `//` line comments before
-// treating a `/` as a block comment, so a line comment that mentions a path
-// like `sidebar/*)` cannot open a phantom block comment and swallow half the
-// file (which is exactly what stripComments() does to sidebar-metrics.tsx).
-// Strings and template literals are carried through untouched.
+// The single comment stripper for every source-posture assertion in this file.
+// It consumes `//` line comments before treating a `/` as a block comment, so a
+// line comment that mentions a path like `sidebar/*)` cannot open a phantom
+// block comment and swallow half the file (the old regex version did exactly
+// that to sidebar-metrics.tsx, silently disabling its posture checks). Strings
+// and template literals are carried through untouched.
 const stripComponentComments = (source: string): string => {
   let result = ""
   let index = 0
@@ -305,6 +305,27 @@ const readCallArgumentText = (source: string, callee: string): string | undefine
   return undefined
 }
 
+// Split a call's argument text on its top-level commas (bracket/brace/paren
+// aware), so `a, () => foo(b, c), now` yields three trimmed arguments. Used to
+// pin argument positions, not just presence.
+const splitCallArguments = (argumentText: string): string[] => {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < argumentText.length; index += 1) {
+    const character = argumentText[index]
+    if (character === "(" || character === "{" || character === "[") depth += 1
+    else if (character === ")" || character === "}" || character === "]") depth -= 1
+    else if (character === "," && depth === 0) {
+      parts.push(argumentText.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  const tail = argumentText.slice(start).trim()
+  if (tail.length > 0) parts.push(tail)
+  return parts
+}
+
 // Index of the first `return` statement at the top level of the function whose
 // body starts at `functionStart` (brace-depth aware, string/template aware), or
 // -1 if the body has none. Used to prove a component body always returns JSX.
@@ -359,12 +380,17 @@ test("sidebar-metrics.tsx (B1): the visibility memo passes the now tick to shoul
   )
   const callArguments = readCallArgumentText(componentSource, "shouldShowSidebarBlock")
   assert.ok(callArguments !== undefined, "sidebar-metrics.tsx must call shouldShowSidebarBlock()")
-  assert.match(
-    callArguments ?? "",
-    /\bnow\b/,
-    "the now tick must be passed to shouldShowSidebarBlock — an early disabled-return that skips " +
-      "the tick read re-introduces B1 (the memo drops its now() dependency and the off->on flip " +
-      "never recomputes the block back to visible on a non-reactive host)",
+  const callArgumentList = splitCallArguments(callArguments ?? "")
+  assert.ok(
+    callArgumentList.length >= 3,
+    "shouldShowSidebarBlock takes three arguments (sidebarMetricsEnabled, readState, readTick)",
+  )
+  assert.equal(
+    callArgumentList[2],
+    "now",
+    "the third argument must be the now tick — a reordered call, or an early disabled-return " +
+      "that skips the tick read, re-introduces B1 (the memo drops its now() dependency and the " +
+      "off->on flip never recomputes the block back to visible on a non-reactive host)",
   )
 })
 
