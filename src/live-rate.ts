@@ -11,6 +11,19 @@ export type LiveRateMemoryEntry = { turnStartedAt: number; tokensPerSecond: numb
 
 export type LiveRateReading = { tokensPerSecond: number; dim: boolean }
 
+// Apply the per-session calibration factor to a raw live reading, then floor
+// it at 1. v0.7.38 (B2): the estimator's live rate can be as low as 1 tok/s
+// while the calibration floor is 0.25, so `Math.round(1 * 0.25)` rendered the
+// impossible "⚡ 0 tok/s" (token flow had been observed) and stored that 0 in
+// the held memory too. A positive live reading must never be displayed as 0.
+export function liveRateDisplayValue(
+  liveTokensPerSecond: number | undefined,
+  calibrationFactor: number,
+): number | undefined {
+  if (liveTokensPerSecond === undefined) return undefined
+  return Math.max(1, Math.round(liveTokensPerSecond * calibrationFactor))
+}
+
 export function resolveLiveRateReading(
   memory: Map<string, LiveRateMemoryEntry>,
   sessionID: string,

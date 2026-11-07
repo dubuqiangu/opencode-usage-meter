@@ -5,6 +5,7 @@ import { createSignal } from "solid-js"
 import { fmtNum, fmtUSD, format } from "./format"
 import { dailyHitRatio, sessionHitRatio } from "./hit-rate"
 import { liveRate } from "./rate-model"
+import { isSessionRunning } from "./session-context"
 import { TOTAL_SCOPE_LABELS } from "./settings"
 import type { CalibrationApi } from "./calibration"
 import type { SessionMetricsApi } from "./session-metrics"
@@ -106,6 +107,10 @@ export function createPanelContent(deps: {
       while (queue.length > 0 && found.length < 200) {
         const parentID = queue.shift()!
         for (const s of all) {
+          // v0.7.38 (B4): the outer while only checked the cap before each
+          // dequeue, so one wide generation could push `found` far past 200.
+          // Break inside the scan as well so the cap holds per node.
+          if (found.length >= 200) break
           if (s?.parentID !== parentID || seen.has(s.id)) continue
           seen.add(s.id)
           found.push(s)
@@ -226,13 +231,10 @@ export function createPanelContent(deps: {
   const sessionLines = (sessionID: string | undefined): string[] => {
     if (!sessionID) return []
     const lines: string[] = ["── 当前会话 ──"]
-    // 0.7.21: wrap the host status() read — see footer-status.tsx; a
+    // 0.7.21: wrap the host status() read — see session-context.ts; a
     // throwing client degrades to "not running" instead of breaking the
     // panel header build.
-    let running = false
-    try {
-      running = context.data?.session?.status?.(sessionID) === "running"
-    } catch {}
+    const running = isSessionRunning(context, sessionID)
     const started = starts.get(sessionID)
     const last = lastDurations.get(sessionID)
     const currentTime = now()

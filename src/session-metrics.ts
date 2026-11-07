@@ -277,8 +277,12 @@ export function createSessionMetrics(deps: {
     // Recovery if the execution.started event was missed (e.g. TUI opened mid-run).
     const sessionID = sessionIDOf(event)
     const data = dataOf(event)
-    const started = data?.started
-    if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
+    // v0.7.38 (B5): reuse the tolerant timestamp coercion used everywhere
+    // else on host/message times — a host that delivers `started` as an ISO
+    // string used to fail the bare Number.isFinite check and the recovery
+    // was skipped entirely.
+    const started = tsOf(data?.started)
+    if (sessionID && started !== undefined && !starts.has(sessionID)) {
       lastExactRates.delete(sessionID)
       lastAvgRates.delete(sessionID)
       // v0.7.37: same as onExecutionStarted — a recovered turn start must not

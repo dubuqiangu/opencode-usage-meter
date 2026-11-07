@@ -62,3 +62,49 @@ test("ensureDetail degrades to the error state when the stats call never settles
   await pendingDetail
   assert.match(String(panelContent.detail()?.error), /timed out/)
 })
+
+// Build a panel whose host session list is the supplied session records; the
+// detail path is never exercised here, so the stats client is a plain stub.
+const newPanelContentWithSessions = (sessions: any[]) =>
+  createPanelContent({
+    context: { data: { session: { list: () => sessions } } },
+    sessionMetrics: {
+      starts: new Map(),
+      lastDurations: new Map(),
+      lastAvgRates: new Map(),
+      lastExactRates: new Map(),
+      rates: new Map(),
+    },
+    settings: { totalScopeEnabled: () => "today" },
+    statsSource: createStatsSource({ client: { session: { stats: async () => ({}) } } }),
+    calibration: { calibOf: () => 1 },
+    now: () => 1_000_000,
+  })
+
+test("descendantSessions caps a single wide generation at 200 (0.7.38 B4)", () => {
+  // One root with 500 direct children: the outer while only checked the cap
+  // before each dequeue, so the whole generation was pushed and `found`
+  // returned 500. The inner break must hold the cap at exactly 200.
+  const wideChildren = Array.from({ length: 500 }, (_, index) => ({
+    id: `ses_child_${index}`,
+    parentID: "ses_root",
+  }))
+  const panelContent = newPanelContentWithSessions(wideChildren)
+  assert.equal(panelContent.descendantSessions("ses_root").length, 200)
+})
+
+test("descendantSessions walks the delegation tree breadth-first", () => {
+  const sessions = [
+    { id: "ses_root" },
+    { id: "ses_a", parentID: "ses_root" },
+    { id: "ses_c", parentID: "ses_root" },
+    { id: "ses_b", parentID: "ses_a" },
+    { id: "ses_unrelated", parentID: "ses_other" },
+  ]
+  const panelContent = newPanelContentWithSessions(sessions)
+  const descendants = panelContent.descendantSessions("ses_root")
+  assert.deepEqual(
+    descendants.map((session) => session.id),
+    ["ses_a", "ses_c", "ses_b"],
+  )
+})

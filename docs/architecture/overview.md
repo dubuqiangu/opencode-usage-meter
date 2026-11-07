@@ -9,8 +9,8 @@
 ## 运行环境与加载机制
 
 1. **发现**:OpenCode 启动时扫描 `~/.config/opencode/plugins/<name>/`,读取 `package.json` 的 `exports["./tui"]` 加载为 TUI 插件;`exports["."]` 加载为服务端插件(本插件为空占位)。
-2. **模块解析**:`import { Plugin } from "@opencode/plugin/tui"` 由 OpenCode 运行时代理解析(本地无需安装);`solid-js` / `@opentui/solid` 从插件目录 `node_modules` 解析。
-3. **JSX**:`.tsx` 顶部 `@jsxImportSource @opentui/solid` pragma,由 OpenCode 内置 TSX 转换器按 solid-js 语义编译。
+2. **模块解析(0.7.24 起零依赖声明)**:TUI 入口自 0.7.25 起投递为预编译单文件 `dist/tui.js`;其中 `@opencode/*`、`@opentui/*`、`solid-js` 全部以**裸 specifier** 出现,由宿主**运行时外置提供**(与宿主 slot 机制同图)。插件不声明也不安装这些包的本地拷贝——历史"从插件目录 `node_modules` 解析"(0.7.24 前)会装出寄生拷贝,使 RendererContext/owner 链与信号订阅跨图失效。机制见 [tui-plugin-pitfalls.md](../guides/tui-plugin-pitfalls.md) #13/#14/#16。
+3. **JSX/构建**:`.tsx` 顶部 `@jsxImportSource @opentui/solid` pragma,由 `npm run build:tui`(esbuild `--jsx=automatic`)在构建期按 solid-js 语义编译进 `dist/tui.js`;运行时不再做 TSX 转换。
 4. **生命周期**:`setup(context)` 加载时执行一次;返回的清理函数在卸载/重载时执行(清理 interval、slot、全部订阅)。
 5. **热重载限制**:`plugin update` 后必须完整重启 TUI;`/reload` 不从磁盘重载插件(详见 [runtime-lessons.md](runtime-lessons.md))。
 

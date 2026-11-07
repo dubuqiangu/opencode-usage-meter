@@ -494,3 +494,20 @@ test("a delayed recompute from the previous turn cannot overwrite the new one (0
   await t.mock.timers.tick(1_400)
   assert.equal(metrics.lastExactRates.get("ses_stale_timer"), 40)
 })
+
+test("onStepStarted recovers an ISO-string start timestamp (0.7.38 B5)", () => {
+  // Hosts may deliver execution.step.started as an ISO string. The old bare
+  // Number.isFinite check rejected it, so the recovery was silently skipped
+  // and a TUI opened mid-run never showed the ⏱ start (or the live rate).
+  const { metrics } = createMetricsHarness()
+  const isoStarted = "2024-06-01T12:00:00.000Z"
+  metrics.onStepStarted({ sessionID: "ses_iso_started", started: isoStarted })
+  assert.equal(metrics.starts.get("ses_iso_started"), Date.parse(isoStarted))
+  assert.ok(metrics.rates.has("ses_iso_started"))
+})
+
+test("onStepStarted ignores an unparseable start timestamp (0.7.38 B5)", () => {
+  const { metrics } = createMetricsHarness()
+  metrics.onStepStarted({ sessionID: "ses_bad_started", started: "not-a-date" })
+  assert.equal(metrics.starts.has("ses_bad_started"), false)
+})

@@ -5,6 +5,8 @@
 // Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createMemo } from "solid-js"
 import { PANEL_NAME } from "../panel-content"
+import { createDisposableLayer } from "../layer-lifecycle"
+import { currentSessionID } from "../session-context"
 import type { PanelContentApi } from "../panel-content"
 
 export type StatsPanelApi = {
@@ -78,14 +80,7 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
       // v0.7.26: router.current() is a host client call that can throw on a
       // stale handle; the fallback dialog tolerates a missing sessionID, so
       // degrade instead of rejecting runTokensCommand (fired as void).
-      let sid: string | undefined
-      try {
-        const route: any = context.ui?.router?.current?.()
-        sid =
-          route?.type === "session"
-            ? (route.sessionID ?? route.params?.sessionID)
-            : route?.params?.sessionID
-      } catch {}
+      const sid = currentSessionID(context)
       try {
         context.ui.dialog.set({ size: "large", centered: true })
       } catch {}
@@ -110,49 +105,42 @@ export function createStatsPanel(deps: { context: any; panelContent: PanelConten
   // layer is created once per panel presence (guarded) and released when
   // the panel slot stops naming our panel (tui.tsx render path) or at
   // plugin teardown via disposeFullscreenLayer.
-  let fullscreenLayerDispose: any
   // v0.7.13: the layer's run closure must not capture the panel object
   // from the mount that created it — the host hands the slot a fresh
   // panel object on re-renders, and a stale closure would toggle
   // fullscreen on a dead one. Every StatsPanel invocation refreshes this.
+  // v0.7.38: the create/release pair is the shared createDisposableLayer
+  // helper (also used by the settings dialog), so the two cannot drift.
   let currentFullscreenPanel: any
+  const fullscreenLayer = createDisposableLayer()
   const StatsPanel = (props: { panel: any }) => {
     currentFullscreenPanel = props.panel
-    if (fullscreenLayerDispose === undefined) {
+    if (fullscreenLayer.current() === undefined) {
       try {
-        fullscreenLayerDispose = (context.keymap as any)?.layer?.(() => ({
-          commands: [
-            {
-              id: "usage-meter.stats.fullscreen",
-              title: "统计面板全屏",
-              bind: "f",
-              run: () => {
-                try {
-                  currentFullscreenPanel?.toggleFullscreen?.()
-                } catch {}
+        fullscreenLayer.set(
+          (context.keymap as any)?.layer?.(() => ({
+            commands: [
+              {
+                id: "usage-meter.stats.fullscreen",
+                title: "统计面板全屏",
+                bind: "f",
+                run: () => {
+                  try {
+                    currentFullscreenPanel?.toggleFullscreen?.()
+                  } catch {}
+                },
               },
-            },
-          ],
-        }))
+            ],
+          })),
+        )
       } catch {
-        fullscreenLayerDispose = null
+        fullscreenLayer.set(null)
       }
     }
     return <StatsBody sessionID={props.panel?.sessionID} />
   }
 
-  const disposeFullscreenLayer = (): void => {
-    if (typeof fullscreenLayerDispose === "function") {
-      try {
-        fullscreenLayerDispose()
-      } catch {}
-    } else if (fullscreenLayerDispose && typeof fullscreenLayerDispose.dispose === "function") {
-      try {
-        fullscreenLayerDispose.dispose()
-      } catch {}
-    }
-    fullscreenLayerDispose = undefined
-  }
+  const disposeFullscreenLayer = fullscreenLayer.dispose
 
   return { StatsBody, StatsPanel, runTokensCommand, disposeFullscreenLayer }
 }

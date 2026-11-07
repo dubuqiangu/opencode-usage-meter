@@ -230,3 +230,161 @@ test("dist/tui.js is byte-identical to a rebuild via the package build script", 
     rmSync(tempBundlePath, { force: true })
   }
 })
+
+// --- .tsx integration invariants (real-machine only) ---------------------------
+// test-loader.mjs cannot import .tsx (it holds JSX), so the render-chain fixes
+// that only manifest on the real host can be pinned only by reading the
+// component source. These assert structure, not formatting: the regexes stay
+// loose enough to survive unrelated refactors.
+
+// Comment stripper for the component assertions below. It differs from the
+// shared stripComments() on purpose: it consumes `//` line comments before
+// treating a `/` as a block comment, so a line comment that mentions a path
+// like `sidebar/*)` cannot open a phantom block comment and swallow half the
+// file (which is exactly what stripComments() does to sidebar-metrics.tsx).
+// Strings and template literals are carried through untouched.
+const stripComponentComments = (source: string): string => {
+  let result = ""
+  let index = 0
+  while (index < source.length) {
+    const character = source[index]
+    const following = source[index + 1]
+    if (character === '"' || character === "'" || character === "`") {
+      result += character
+      index += 1
+      while (index < source.length && source[index] !== character) {
+        result += source[index]
+        if (source[index] === "\\") {
+          index += 1
+          result += source[index] ?? ""
+        }
+        index += 1
+      }
+      if (index < source.length) {
+        result += source[index]
+        index += 1
+      }
+      continue
+    }
+    if (character === "/" && following === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1
+      continue
+    }
+    if (character === "/" && following === "*") {
+      index += 2
+      while (
+        index < source.length &&
+        !(source[index] === "*" && source[index + 1] === "/")
+      ) {
+        index += 1
+      }
+      index += 2
+      continue
+    }
+    result += character
+    index += 1
+  }
+  return result
+}
+
+// Text between the parentheses of the first `callee(` call, balanced so nested
+// calls/arrow args do not truncate early. Undefined when the call is absent.
+const readCallArgumentText = (source: string, callee: string): string | undefined => {
+  const callIndex = source.indexOf(`${callee}(`)
+  if (callIndex === -1) return undefined
+  const openIndex = callIndex + callee.length
+  let depth = 0
+  for (let index = openIndex; index < source.length; index += 1) {
+    const character = source[index]
+    if (character === "(") depth += 1
+    else if (character === ")") {
+      depth -= 1
+      if (depth === 0) return source.slice(openIndex + 1, index)
+    }
+  }
+  return undefined
+}
+
+// Index of the first `return` statement at the top level of the function whose
+// body starts at `functionStart` (brace-depth aware, string/template aware), or
+// -1 if the body has none. Used to prove a component body always returns JSX.
+const findFirstTopLevelReturnIndex = (source: string, functionStart: number): number => {
+  const arrowIndex = source.indexOf("=> {", functionStart)
+  if (arrowIndex === -1) return -1
+  const bodyOpenIndex = source.indexOf("{", arrowIndex)
+  let depth = 0
+  for (let index = bodyOpenIndex; index < source.length; index += 1) {
+    const character = source[index]
+    if (character === '"' || character === "'" || character === "`") {
+      index += 1
+      while (index < source.length && source[index] !== character) {
+        if (source[index] === "\\") index += 1
+        index += 1
+      }
+      continue
+    }
+    if (character === "{") {
+      depth += 1
+    } else if (character === "}") {
+      depth -= 1
+      if (depth === 0) return -1
+    } else if (depth === 1 && source.startsWith("return", index)) {
+      const characterBefore = source[index - 1]
+      const characterAfter = source[index + 6]
+      if (!/[A-Za-z0-9_$]/.test(characterBefore ?? "") && !/[A-Za-z0-9_$]/.test(characterAfter ?? "")) {
+        return index
+      }
+    }
+  }
+  return -1
+}
+
+test("src .tsx: dim text runs pass 0 (not undefined) as the attributes value", () => {
+  for (const componentFileName of ["footer-status.tsx", "sidebar-metrics.tsx"]) {
+    const componentSource = stripComponentComments(
+      readUtf8(join(srcRoot, "components", componentFileName)),
+    )
+    assert.match(
+      componentSource,
+      /\?\s*DIM_TEXT_ATTRIBUTE\s*:\s*0\b/,
+      `${componentFileName} must pass 0 as the non-dim attributes value — the host stores ` +
+        `props verbatim and an undefined would pollute the text buffer's default attributes`,
+    )
+  }
+})
+
+test("sidebar-metrics.tsx (B1): the visibility memo passes the now tick to shouldShowSidebarBlock", () => {
+  const componentSource = stripComponentComments(
+    readUtf8(join(srcRoot, "components", "sidebar-metrics.tsx")),
+  )
+  const callArguments = readCallArgumentText(componentSource, "shouldShowSidebarBlock")
+  assert.ok(callArguments !== undefined, "sidebar-metrics.tsx must call shouldShowSidebarBlock()")
+  assert.match(
+    callArguments ?? "",
+    /\bnow\b/,
+    "the now tick must be passed to shouldShowSidebarBlock — an early disabled-return that skips " +
+      "the tick read re-introduces B1 (the memo drops its now() dependency and the off->on flip " +
+      "never recomputes the block back to visible on a non-reactive host)",
+  )
+})
+
+test("footer-status.tsx (B3): the component body always returns <box>; the !sessionID gate lives in the memo", () => {
+  const componentSource = stripComponentComments(
+    readUtf8(join(srcRoot, "components", "footer-status.tsx")),
+  )
+  const componentStart = componentSource.indexOf("const FooterStatus = (")
+  assert.ok(componentStart !== -1, "could not locate the FooterStatus component body")
+  const firstTopLevelReturnIndex = findFirstTopLevelReturnIndex(componentSource, componentStart)
+  assert.ok(firstTopLevelReturnIndex !== -1, "FooterStatus must return a value")
+  assert.match(
+    componentSource.slice(firstTopLevelReturnIndex, firstTopLevelReturnIndex + 40),
+    /^return\s*\(\s*<box/,
+    "the component body's first top-level return must be the JSX <box> — a top-level " +
+      "`if (!sessionID) return null` re-introduces B3 (createComponent runs the body inside " +
+      "untrack, so the row freezes blank whenever the first frame has no session yet)",
+  )
+  assert.ok(
+    componentSource.includes("if (!sessionID) return null"),
+    "the !sessionID gate must remain, moved into the tracked memo so the tick can heal a late id",
+  )
+})

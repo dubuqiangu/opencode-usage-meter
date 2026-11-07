@@ -2,6 +2,8 @@
 // persisted per model across sessions/restarts. Split from tui.tsx in
 // v0.7.x — behavior unchanged.
 
+import { noopRelease, openStore } from "./durable-store"
+
 export type CalibrationApi = {
   calibOf: (sessionID: string) => number
   learnCalibration: (sessionID: string, before: number, out: number) => void
@@ -15,16 +17,14 @@ export function createCalibration(context: any): CalibrationApi {
   const calibs = new Map<string, number>()
   // v0.6.3: calibration persists per model across sessions/restarts via
   // durable storage, so a new session starts already-calibrated.
-  let calibStore: Record<string, number> = {}
-  let updateCalibStore: ((fn: (draft: Record<string, number>) => void) => Promise<void>) | undefined
-  try {
-    const store = (context.storage as any)?.store
-    if (typeof store === "function") {
-      const [s, u] = store("usage-meter.calib", { initial: {} })
-      calibStore = s ?? {}
-      updateCalibStore = u
-    }
-  } catch {}
+  // v0.7.38: the store bootstrap is shared with settings (openStore) — a
+  // missing/failed store used to be a silent no-op here while settings
+  // logged it, so the two drifted; both now report the dead end the same way.
+  const { state: calibStore, update: updateCalibStore } = openStore<Record<string, number>>(
+    context,
+    "usage-meter.calib",
+    {},
+  )
 
   // Last-seen model per session ("provider/model"), used to key persisted
   // calibration; falls back to the session record.
@@ -77,7 +77,7 @@ export function createCalibration(context: any): CalibrationApi {
   // The durable store is host-managed; the original cleanup released
   // nothing for it, so release is a deliberate no-op kept for the
   // factory interface.
-  const release = (): void => {}
+  const release = noopRelease
 
   return { calibOf, learnCalibration, rememberSessionModel, release }
 }

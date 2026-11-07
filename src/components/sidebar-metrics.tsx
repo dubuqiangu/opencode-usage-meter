@@ -30,11 +30,10 @@
 // (packages/tui/src/feature-plugins/sidebar/*) never touch `context.renderer`
 // — they rely on the reactive store plus the host's paint cycle.
 import { createMemo } from "solid-js"
-import { fmtNum, format } from "../format"
-import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
-import { resolveLiveRateReading } from "../live-rate"
 import { DIM_TEXT_ATTRIBUTE } from "../text-attributes"
+import { composeSidebarBlock, shouldShowSidebarBlock } from "../sidebar-block"
+import { isSessionRunning } from "../session-context"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
 import type { SettingsApi } from "../settings"
@@ -92,96 +91,39 @@ export function createSidebarMetrics(deps: {
     // signals, settings signals, collapsed flag) lives inside the memo, so
     // the interpolations below re-render on each 500ms tick, on every stats
     // refresh, and when the store mutation lands contained in that tick.
-    const blockState = createMemo(() => {
-      const currentTime = now()
-      const collapsed = statsBlockCollapsed()
-      const blockLines: Array<{ text: string; dim: boolean }> = []
-      if (!collapsed) {
-        // 0.7.21: wrap the host status() read — see footer-status.tsx; a
-        // throwing client must degrade to "not running", not poison the
-        // unified-instance reactive chain.
-        let running = false
-        try {
-          running = context.data?.session?.status?.(sessionID) === "running"
-        } catch {}
-        const started = starts.get(sessionID)
-        const last = lastDurations.get(sessionID)
-        // v0.7.1: narrow column — split time and rate onto separate lines,
-        // English-only labels, and unify the scope suffix in parentheses.
-        if (running && started !== undefined) {
-          blockLines.push({ text: `⏱ ${format(currentTime - started)}`, dim: false })
+    // v0.7.38: the branch selection moved to sidebar-block.ts (pure, unit
+    // testable). The sources below preserve the exact read order and the
+    // collapsed short-circuit: none of the stats/status reads run while the
+    // block is collapsed.
+    const blockState = createMemo(() =>
+      composeSidebarBlock({
+        now,
+        collapsed: statsBlockCollapsed,
+        running: () => isSessionRunning(context, sessionID),
+        started: () => starts.get(sessionID),
+        last: () => lastDurations.get(sessionID),
+        exactRate: () => lastExactRates.get(sessionID),
+        avgRate: () => lastAvgRates.get(sessionID),
+        liveTokensPerSecond: (currentTime) => {
           const rate = rates.get(sessionID)
-          const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : undefined
-          const reading = resolveLiveRateReading(
-            lastLiveRates,
-            sessionID,
-            started,
-            liveTokensPerSecond === undefined
-              ? undefined
-              : Math.round(liveTokensPerSecond * calibOf(sessionID)),
-          )
-          if (reading !== undefined) {
-            blockLines.push({ text: `⚡ ${reading.tokensPerSecond} tok/s`, dim: reading.dim })
-          }
-        } else if (running) {
-          blockLines.push({ text: "⏳", dim: false })
-        } else if (last !== undefined) {
-          blockLines.push({ text: `🏁 ${format(last)}`, dim: false })
-          const exact = lastExactRates.get(sessionID)
-          const avgRate = lastAvgRates.get(sessionID)
-          if (exact !== undefined) blockLines.push({ text: `⚡ ${exact} tok/s`, dim: false })
-          else if (avgRate !== undefined)
-            blockLines.push({ text: `⚡ ${avgRate} tok/s avg`, dim: false })
-        }
-        const stats = todayStats()
-        const hitScope = hitScopeEnabled()
-        // v0.7.7: the 📊 total follows the persisted scope — today is the
-        // default; rolling windows (24h/7d/30d) are separate read-only
-        // queries fetched by the stats source on demand.
-        const totalScope = totalScopeEnabled()
-        const scopeStats = totalFor(totalScope)
-        if (scopeStats) {
-          const scopeTokens = scopeStats?.tokens
-          const freshTokensTotal =
-            (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
-          // v0.7.15: dual reading — same scope, cache-inclusive grand total
-          // (in+out+reasoning+cache R/W) shown after the fresh-compute Σ/📊
-          // metric, so "total tokens" answers that sum cache.read can be
-          // reconciled at a glance. Omitted when there is no cache volume.
-          const cacheInclusiveTotal =
-            freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0)
-          if (freshTokensTotal > 0) {
-            blockLines.push({
-              text:
-                cacheInclusiveTotal > freshTokensTotal
-                  ? `📊 ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})`
-                  : `📊 ${fmtNum(freshTokensTotal)} (${totalScope})`,
-              dim: false,
-            })
-          }
-        }
-        if (hitScope === "session") {
+          return rate ? liveRate(rate, currentTime) : undefined
+        },
+        calibrationFactor: () => calibOf(sessionID),
+        liveMemory: lastLiveRates,
+        sessionID,
+        todayStats,
+        hitScope: hitScopeEnabled,
+        totalScope: totalScopeEnabled,
+        scopeStats: (scope) => totalFor(scope),
+        sessionTokens: () => {
           try {
-            const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens
-            const sessionRatio = sessionHitRatio(
-              sessionTokens?.cache?.read ?? 0,
-              sessionTokens?.input ?? 0,
-              sessionTokens?.cache?.write ?? 0,
-            )
-            if (sessionRatio !== undefined)
-              blockLines.push({
-                text: `🎯 ${(sessionRatio * 100).toFixed(1)}% (session)`,
-                dim: false,
-              })
-          } catch {}
-        } else if (stats) {
-          const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0)
-          if (dailyRatio !== undefined)
-            blockLines.push({ text: `🎯 ${(dailyRatio * 100).toFixed(1)}% (today)`, dim: false })
-        }
-      }
-      return { collapsed, lines: blockLines }
-    })
+            return context.data?.session?.get?.(sessionID)?.tokens
+          } catch {
+            return undefined
+          }
+        },
+      }),
+    )
     // v0.7.36: the "nothing to show yet" gate used to be an early return in
     // the component body. createComponent runs the body inside untrack, so
     // that read never registered as a dependency — and because the body
@@ -192,16 +134,14 @@ export function createSidebarMetrics(deps: {
     // The gate is now a boolean memo read from the child thunks below:
     // visibility becomes a tracked dependency, and because this memo only
     // changes when visibility actually flips, the 500ms tick adds no work.
-    const hasContent = createMemo(() => {
-      // v0.7.36: the block's on/off switch is part of the same tracked gate.
-      // It used to be a component-body early return (createComponent runs the
-      // body inside untrack), so turning the block off in /usage-settings
-      // left it on screen until the host re-mounted the sidebar, while the
-      // dialog already said "off".
-      if (!sidebarMetricsEnabled()) return false
-      const state = blockState()
-      return state.collapsed || state.lines.length > 0
-    })
+    // v0.7.38 (B1): shouldShowSidebarBlock reads the tick UNCONDITIONALLY,
+    // before the on/off early return — Solid clears the sources registered by
+    // the previous recompute on every run, so the old early return dropped
+    // the now() dependency and the off->on flip never recomputed the block
+    // back to visible on a non-reactive host.
+    const hasContent = createMemo(() =>
+      shouldShowSidebarBlock(sidebarMetricsEnabled, blockState, now),
+    )
     const base = (context.theme as any)?.text?.base
     const muted = context.theme?.text?.muted
     return (

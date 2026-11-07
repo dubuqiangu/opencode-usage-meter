@@ -3,6 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  liveRateDisplayValue,
   resolveLiveRateReading,
   type LiveRateMemoryEntry,
 } from "../src/live-rate.ts"
@@ -40,4 +41,16 @@ test("a later live value within the same turn replaces the held reading", () => 
   const reading = resolveLiveRateReading(memory, "session-a", 1_000, 55)
   assert.deepEqual(reading, { tokensPerSecond: 55, dim: false })
   assert.deepEqual(memory.get("session-a"), { turnStartedAt: 1_000, tokensPerSecond: 55 })
+})
+
+test("liveRateDisplayValue passes undefined through", () => {
+  assert.equal(liveRateDisplayValue(undefined, 1), undefined)
+})
+
+test("liveRateDisplayValue floors a positive calibrated rate at 1 (0.7.38 B2)", () => {
+  // The impossible "⚡ 0 tok/s" case: raw 1 tok/s under the 0.25 floor.
+  assert.equal(liveRateDisplayValue(1, 0.25), 1)
+  // Ordinary rounding is untouched.
+  assert.equal(liveRateDisplayValue(43.4, 1), 43)
+  assert.equal(liveRateDisplayValue(100, 0.5), 50)
 })

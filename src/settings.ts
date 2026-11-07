@@ -1,6 +1,8 @@
 // Durable user settings (footer/sidebar dimension toggles). Split from
 // tui.tsx in v0.7.x — behavior unchanged.
 
+import { noopRelease, openStore } from "./durable-store"
+
 export type TotalScope = "today" | "24h" | "7d" | "30d"
 export const TOTAL_SCOPES: readonly TotalScope[] = ["today", "24h", "7d", "30d"]
 // Human labels for the panel/settings dialog (Chinese surfaces); the
@@ -41,42 +43,30 @@ export function createSettings(context: any): SettingsApi {
   // v0.6.6: user-facing footer dimension settings (durable, synced across
   // TUI instances). The user host (2.0.21) has no plugin-options config
   // channel yet, so settings persist here and toggle via /usage-settings.
-  let settingsStore: any = {}
-  let updateSettingsStore: ((fn: (draft: any) => void) => Promise<void>) | undefined
-  try {
-    const store = (context.storage as any)?.store
-    if (typeof store === "function") {
-      const [s, u] = store("usage-meter.settings", {
-        initial: {
-          hitScope: "today" as "today" | "session",
-          // v0.7.0: the footer defaults to waited + tok/s only; the Σ and
-          // hit segments are opt-in. The right-sidebar metrics block is on
-          // by default. Absent keys fall back to these defaults on read.
-          footerSigma: false,
-          footerHit: false,
-          sidebarMetrics: true,
-          // v0.7.7: rolling secondary dimension for the Σ/📊 total
-          // (today | last 24h | last 7d | last 30d). Absent key reads as
-          // "today", matching pre-0.7.7 behavior.
-          totalScope: "today" as TotalScope,
-          // v0.7.9: click-to-collapse state of the right-sidebar Stats
-          // header (mirrors the native MCP / OMO-Slim section headers).
-          // Absent key reads as expanded, matching pre-0.7.9 behavior.
-          statsBlockCollapsed: false,
-        },
-      })
-      settingsStore = s ?? {}
-      updateSettingsStore = u
-    } else {
-      // v0.7.12: a missing storage.store used to be a fully silent no-op —
-      // every toggle then "succeeded" without persisting anything. Log it
-      // once so the host incompatibility is visible in the dev log.
-      console.error("[usage-meter] storage.store unavailable — settings will not persist")
-    }
-  } catch (error) {
-    // v0.7.12: same visibility rule for a store creation that throws.
-    console.error("[usage-meter] settings store creation failed:", error)
-  }
+  // v0.7.38: the store bootstrap is shared with calibration (openStore); the
+  // two failure modes keep their v0.7.12 visibility (log once, no silent
+  // no-op) and now read identically in both factories.
+  const { state: settingsStore, update: updateSettingsStore } = openStore<any>(
+    context,
+    "usage-meter.settings",
+    {
+      hitScope: "today" as "today" | "session",
+      // v0.7.0: the footer defaults to waited + tok/s only; the Σ and
+      // hit segments are opt-in. The right-sidebar metrics block is on
+      // by default. Absent keys fall back to these defaults on read.
+      footerSigma: false,
+      footerHit: false,
+      sidebarMetrics: true,
+      // v0.7.7: rolling secondary dimension for the Σ/📊 total
+      // (today | last 24h | last 7d | last 30d). Absent key reads as
+      // "today", matching pre-0.7.7 behavior.
+      totalScope: "today" as TotalScope,
+      // v0.7.9: click-to-collapse state of the right-sidebar Stats
+      // header (mirrors the native MCP / OMO-Slim section headers).
+      // Absent key reads as expanded, matching pre-0.7.9 behavior.
+      statsBlockCollapsed: false,
+    },
+  )
 
   // Normalized settings readers: persisted stores from older versions lack
   // the newer keys, so each reader applies the documented default itself.
@@ -158,7 +148,7 @@ export function createSettings(context: any): SettingsApi {
   // The durable store is host-managed; the original cleanup released
   // nothing for it, so release is a deliberate no-op kept for the
   // factory interface.
-  const release = (): void => {}
+  const release = noopRelease
 
   return {
     settingsStore,

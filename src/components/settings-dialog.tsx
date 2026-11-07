@@ -8,6 +8,7 @@
 // the same fallback the footer/sidebar memos have always had.
 // Split from tui.tsx in v0.7.x — behavior unchanged.
 import { createMemo } from "solid-js"
+import { createDisposableLayer } from "../layer-lifecycle"
 import type { SettingsApi, TotalScope } from "../settings"
 import { TOTAL_SCOPE_LABELS, nextTotalScope } from "../settings"
 
@@ -38,14 +39,14 @@ export function createSettingsDialog(deps: {
   // open stacked another layer, leaking the d/s/f/h/b binds for the rest
   // of the session. The layer is created once per open (guarded) and
   // released through the dialog's onClose callback, which tui.tsx wires to
-  // disposeKeymapLayer below.
-  let keymapLayerDispose: any
+  // disposeKeymapLayer below. v0.7.38: shared createDisposableLayer helper.
+  const keymapLayer = createDisposableLayer()
 
   const SettingsBody = () => {
     // Keymap layers must be created from a component scope (see §12D).
-    if (keymapLayerDispose === undefined) {
+    if (keymapLayer.current() === undefined) {
       try {
-        keymapLayerDispose = (context.keymap as any)?.layer?.(() => ({
+        const created = (context.keymap as any)?.layer?.(() => ({
           commands: [
             {
               id: "usage-meter.settings.toggle-hit",
@@ -95,8 +96,9 @@ export function createSettingsDialog(deps: {
             },
           ],
         }))
+        keymapLayer.set(created)
       } catch {
-        keymapLayerDispose = null
+        keymapLayer.set(null)
       }
     }
     // v0.7.12: the line list is computed lazily inside a memo — the dialog
@@ -140,18 +142,7 @@ export function createSettingsDialog(deps: {
   // SettingsBody re-creates the layer on the next open once this resets
   // the handle. tui.tsx calls this from the dialog's onClose callback and
   // from the plugin cleanup (in case the dialog is open at teardown).
-  const disposeKeymapLayer = (): void => {
-    if (typeof keymapLayerDispose === "function") {
-      try {
-        keymapLayerDispose()
-      } catch {}
-    } else if (keymapLayerDispose && typeof keymapLayerDispose.dispose === "function") {
-      try {
-        keymapLayerDispose.dispose()
-      } catch {}
-    }
-    keymapLayerDispose = undefined
-  }
+  const disposeKeymapLayer = keymapLayer.dispose
 
   return { SettingsBody, disposeKeymapLayer }
 }

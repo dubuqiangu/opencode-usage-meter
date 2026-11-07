@@ -23,7 +23,7 @@
 
 - **footer 可选段**:Σ(总耗 `input+output+reasoning`,维度见下;cache 成本结构不同不计入)与 hit(见下);数值为 0 或 API 不可用时隐藏。两口径对账(0.7.14):含 cache.read 的"总 token 数"可在 /usage-full 面板今日合计的**含缓存总量**行直接读出,无需切换工具
 - **Σ/📊 总耗维度(0.7.7)**:`/usage-settings` 按 `s` 在 今日(本地零点)→ 近24小时 → 近7日 → 近30日 滚动窗口间循环,storage 持久化;只有激活的滚动维度会触发一条额外只读查询,`fetchTotals()` 统一带动今日 + 激活窗
-- **刷新策略**:插件加载取一次;`session.step.ended/failed` 后 1.5s 防抖;**60s 周期(0.6.8)**——后台会话(子代理/headless)消耗不触发本会话轮事件,定时器保证空闲期不滞后;500ms tick 检测跨零点自动重取并复位失败标记
+- **刷新策略**:插件加载取一次;`session.step.ended/failed` 后 1.5s 防抖;**60s 周期(0.6.8)**——后台会话(子代理/headless)消耗不触发本会话轮事件,定时器保证空闲期不滞后;500ms tick 检测跨零点自动重取
 - **定时器独立性(0.7.6)**:1.5s 防抖刷新与 30s 缺方法重试是两条独立生命周期,各自持有定时器——修复 0.7.5 前两者共用一个槽位、重试等待期间防抖刷新被静默吞掉的问题
 - **降级**:client 方法缺失 → 30s 定时重试(不一次性判死);请求失败 → 静默隐藏 + 单次日志;不阻塞计时/tok/s 主功能
 
@@ -50,10 +50,6 @@
 - **日级**(footer/右栏 `🎯 (today)`):`cache.read ÷ (cache.read + input)`——stats API 日级口径
 - **会话级严格口径**(面板/`hit·s`/`🎯 (session)`):`cache.read ÷ (input + cache.read + cache.write)`——分母含 cache write,与原生面板一致
 
-## footer 指标段配置化(0.6.6 → 0.7.0)
+## 展示层:footer 段配置与右栏块(交叉引用)
 
-footer 的 hit 段支持两种维度;0.7.0 起 footer 默认只显示 ⏱/⚡,Σ/hit 为 opt-in 开关。配置经 `/usage-settings`,持久化于 `storage.store("usage-meter.settings")`;旧存储缺键由读取器按文档默认值归一。详见 [features/settings.md](../features/settings.md)。
-
-## 右栏指标块(0.7.0)
-
-经 `sidebar.content` slot 与宿主 Context/MCP 区块同通道追加 `Stats` 块,数据与 footer 同源同口径。详见 [features/sidebar-stats.md](../features/sidebar-stats.md)。
+本节的统计口径落在展示层时:footer 的 Σ/hit 可选段、右栏 `Stats` 块均经 `/usage-settings` 配置、持久化于 `storage.store("usage-meter.settings")`,与本节同源同口径。展示细节不在此重复,见功能文档:[footer 状态行](../features/footer.md) · [右栏 Stats 块](../features/sidebar-stats.md) · [设置弹窗](../features/settings.md)。

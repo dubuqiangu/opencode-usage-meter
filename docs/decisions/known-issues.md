@@ -8,7 +8,7 @@
 | 一轮多消息/多步 | 按 `messageID` 分别记账,`turnTotal` 求和 |
 | 精确值按步计数(非累计) | `out > 当前估算` 门槛拒绝倒退的读数 |
 | 双事件族同时到达 | `sessionVocab` 锁,先到者胜,后者忽略 |
-| 工具执行间隙(无流) | 4s 新鲜度门槛使 `liveRate()` 返回空;footer 沿用本轮上次读数并淡化(0.7.35),右栏仍隐藏该项(见下文已结案段) |
+| 工具执行间隙(无流) | 4s 新鲜度门槛使 `liveRate()` 返回空;footer 与右栏都沿用本轮上次读数并淡化(0.7.35 / 0.7.37 同步),本轮从未有过读数才按原样省略 |
 | 子代理 session | 事件带各自 sessionID,状态天然隔离;查看子 session 时 footer 显示其自身速率 |
 | 订阅失败(未知事件名等) | `listen()` try/catch,单个订阅失败不影响其余功能 |
 | 插件卸载/热重载 | 清理函数:clearInterval + slot 注销(四处一致 try/catch,0.7.12 起 footer slot 不再是裸调用例外)+ 全部退订 + 各 factory release(0.7.12 起 sessionMetrics 也入列,清 1.5s 延迟重算定时器) |
@@ -35,7 +35,10 @@
 - `syncedChildren` 终身增长(0.7.6 审视确认,changelog 曾提及、此处补记):`/usage-full` 会话累计块每次渲染都会把新发现的子会话 id 记入模块级 Set 并触发一次性 `session.sync()`;Set 随插件实例生命周期只增不减。纯防重集合、体量为会话数量级、零宿主句柄,不做修
 - `sessionModels` Map 终身增长(0.7.26 审视确认,与 syncedChildren 同性质):calibration 的会话→模型记录随插件实例生命周期只增不减,体量为会话数量级、零宿主句柄,不做修
 
-**已结案:运行中 ⚡ 消失(0.7.28 报告 → 0.7.35 定案)**:
+**运行中 ⚡ 窗口失效的当前结论(0.7.37 定版)**:运行中超过 4s 无流式输出(工具执行 / 思考无输出)时,`liveRate()` 按设计返回空(4s 新鲜度门是设计契约,不改)。此时 footer 与右栏**都**保留**本轮**上一次实时读数并以 DIM 属性淡化,本轮从未有过读数则按原样省略;两处共用 `session-metrics` 的 `lastLiveRates`(按「会话 + 本轮起点」双键,跨轮不串值)与纯函数 `resolveLiveRateReading()`。以下为历史取证注脚:
+
+<details>
+<summary>历史取证:0.7.28 报告 → 0.7.35 定案</summary>
 
 - **取证来源**:0.7.28 装的临时探针(`src/tok-probe.ts`)实际在真机跑过——`%TEMP%\usage-meter-tok-probe.log` 全文 **122,685 行 / 12.3 MB**(2026-10-19 09:59 → 10-21 19:13)。0.7.34 移除它的理由是"唯一本地文件写、违反零采集红线 + 只读旁路",**不是**"无数据";日志已保留,需要时可重新加装复现
 - **门原因分布**:`not-running` 75,612 / `stale>4s` 7,820 / `samples<2` 3,004 / `ok` 465 / `gate(dt-or-zero)` 252 / `no-start` 42
@@ -46,6 +49,8 @@
 - **衍生限制**:`lastLiveRates` 为插件实例生命周期内每会话一条(与 `sessionModels`/`syncedChildren` 同性质:会话数量级、零宿主句柄),不做清理
 - **右栏已同步(0.7.37)**:footer 与右栏共用 `session-metrics` 的 `lastLiveRates`(按「会话 + 本轮起点」双键)与纯函数 `resolveLiveRateReading()`——工具间隙/窗口失效时都保留本轮上次读数并以 DIM 淡化,本轮无读数则都不显示。0.7.35 时期"右栏按 `liveRate()` 有值才显示、4s 间隙整项消失"的刻意差异已按用户要求取消;代价是间隙期间右栏块多占一行且不再抖动消失
 
+</details>
+
 **宿主依赖与生命周期**:
 
 - stats 端点带 `experimental`,OpenCode 升级可能变动 → 全部调用收敛在 `statsCall()` 单函数,便于替换
@@ -54,7 +59,7 @@
 - **`panel.open` 宿主假设(0.7.12 #6 修复的有意权衡,备查)**:`/usage-full` 按 `ui.panel.open` 返回 **boolean** 语义判断成败(`!== true` 即降级弹窗);若未来宿主改为返回 Promise(异步 open)或其他非 true 对象,命令会误入弹窗降级、出现"面板 + 弹窗双表面"。当前实证宿主(v2.0.21)返回 boolean;如遇异步宿主需改为 await/then 链
 - **`void updateSettingsStore(...)` promise 拒绝未挂 catch(0.7.29 已修)**:0.7.29 起 `settings.ts` 三处 toggle 与 `calibration.ts` 的持久化写均已链 `.catch(console.error)`,宿主 storage 写失败不再产生 unhandledRejection 噪音。本条留作历史记录
 - **热重载生命周期(0.7.3 真机实证)**:`plugin update` 只改磁盘包,运行中宿主仍持旧代码;`/reload` 拆掉旧实例定时器与订阅但不从磁盘重载插件——表现为计时冻结、tok/s 停更。**更新后必须完整重启 TUI**
-- **`.tsx` 组件无单测覆盖(0.7.36 审视)**:`test/test-loader.mjs` 只补 `.ts` 解析,`footer-status.tsx` / `sidebar-metrics.tsx` 里的门与渲染逻辑无法被 93 个用例加载;0.7.36 修掉的两个"挂载期早返回门"因此活过了 0.7.8→0.7.35 多轮真机验收。当前回归手段是 `@opentui/solid` 渲染探针(临时脚本,不入库)
+- **`.tsx` 组件无单测覆盖(0.7.36 审视)**:`test/test-loader.mjs` 只补 `.ts` 解析,`footer-status.tsx` / `sidebar-metrics.tsx` 里的门与渲染逻辑无法被现有近百例用例加载(数字随测试增长,不再写死);0.7.36 修掉的两个"挂载期早返回门"因此活过了 0.7.8→0.7.35 多轮真机验收。当前回归手段是 `@opentui/solid` 渲染探针(临时脚本,不入库)
 
 **未取证的宿主语义(0.7.36 全量审视;插件侧无法证明,结论按此假设成立)**:
 
@@ -68,13 +73,14 @@
 8. `session.status()` 的返回形态(当前按字符串 `"running"` 判断)
 9. `session.panel` slot 在 `panelAPI.close()` 后是否还会再渲染一次——0.7.36 起自关分支主动释放 `f` 层,不再依赖这一行为;若宿主确实重渲一次,`disposeFullscreenLayer()` 幂等,无副作用
 
+**有意行为差异(0.7.38,log-only)**:`openStore` 去重(提纯)带来两处**日志层面**的有意变化,均为**有意的日志一致性统一**、非用户可见输出(插件 `console` 不进宿主日志):① calibration 的 storage store 初始化失败由「完全静默」变为「记录一次」;② settings 的失败文案由 `settings will not persist` 变为 `usage-meter.settings will not persist`。二者皆为有意,勿当回归排查。
+
 **刻意不改项(0.7.36 审视结论,避免后续重复排查)**:
 
 - `fetchToday` 在 `statsBusy` 时丢弃刷新(与 0.7.33 修过的 `fetchRange` 不同):60s tick 自愈,无数据丢失
-- 子会话 `sync()` 失败无退避(面板打开期间每 500ms 重试):仅在面板打开时发生;若日志刷屏再加时间戳退避
+- 子会话 `sync()` 失败会撤销在途标记并在下一个 500ms tick 重试(0.7.32),但仍无时间戳退避——仅在面板打开时发生;若日志刷屏再加退避
 - `ensureDetail` 允许并发调用:后返回者覆盖前者,聚合结构不会被破坏,下次刷新自愈
 - `statsSource.release()` 不取消在飞请求、不清 `panelRefresh`:teardown 后最多多写一次只读结果
 - `reactive-mount` 的 `dispose` / `release` 为空实现:正常路径已由宿主 computation 的 dispose 覆盖(探针实证旧 box children 1→0 且脱离父节点);"宿主注销 slot 但保留节点"未观测到
 - `lastDurations` / `lastExactRates` / `lastAvgRates` / `backfillLastAttemptAt` 的 per-session Map 终身增长:与 `sessionModels` / `syncedChildren` 同性质(会话数量级、零宿主句柄)
 - `backfillLastTurn` 成功路径会第二次调用 `message.list`:冗余但已被测试锁定,无正确性问题
-- 右栏在 4s 间隙仍整项隐藏 ⚡(与 footer 的 DIM 淡化策略不同):统一需另评块高抖动代价,见上方 0.7.35 条目

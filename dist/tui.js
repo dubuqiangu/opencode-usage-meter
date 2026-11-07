@@ -2,20 +2,32 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal as createSignal3 } from "solid-js";
 
-// src/calibration.ts
-function createCalibration(context) {
-  const calibs = /* @__PURE__ */ new Map();
-  let calibStore = {};
-  let updateCalibStore;
+// src/durable-store.ts
+function openStore(context, name, initial) {
   try {
     const store = context.storage?.store;
     if (typeof store === "function") {
-      const [s, u] = store("usage-meter.calib", { initial: {} });
-      calibStore = s ?? {};
-      updateCalibStore = u;
+      const [state, update] = store(name, { initial });
+      return { state: state ?? initial, update };
     }
-  } catch {
+    console.error(`[usage-meter] storage.store unavailable \u2014 ${name} will not persist`);
+    return { state: initial, update: void 0 };
+  } catch (error) {
+    console.error(`[usage-meter] ${name} store creation failed:`, error);
+    return { state: initial, update: void 0 };
   }
+}
+var noopRelease = () => {
+};
+
+// src/calibration.ts
+function createCalibration(context) {
+  const calibs = /* @__PURE__ */ new Map();
+  const { state: calibStore, update: updateCalibStore } = openStore(
+    context,
+    "usage-meter.calib",
+    {}
+  );
   const sessionModels = /* @__PURE__ */ new Map();
   const modelKeyOf = (sessionID) => {
     const cached = sessionModels.get(sessionID);
@@ -55,8 +67,7 @@ function createCalibration(context) {
   const rememberSessionModel = (sessionID, model) => {
     sessionModels.set(sessionID, `${model.providerID}/${model.id}`);
   };
-  const release = () => {
-  };
+  const release = noopRelease;
   return { calibOf, learnCalibration, rememberSessionModel, release };
 }
 
@@ -73,38 +84,27 @@ var nextTotalScope = (current) => {
   return TOTAL_SCOPES[(currentIndex + 1) % TOTAL_SCOPES.length];
 };
 function createSettings(context) {
-  let settingsStore = {};
-  let updateSettingsStore;
-  try {
-    const store = context.storage?.store;
-    if (typeof store === "function") {
-      const [s, u] = store("usage-meter.settings", {
-        initial: {
-          hitScope: "today",
-          // v0.7.0: the footer defaults to waited + tok/s only; the Σ and
-          // hit segments are opt-in. The right-sidebar metrics block is on
-          // by default. Absent keys fall back to these defaults on read.
-          footerSigma: false,
-          footerHit: false,
-          sidebarMetrics: true,
-          // v0.7.7: rolling secondary dimension for the Σ/📊 total
-          // (today | last 24h | last 7d | last 30d). Absent key reads as
-          // "today", matching pre-0.7.7 behavior.
-          totalScope: "today",
-          // v0.7.9: click-to-collapse state of the right-sidebar Stats
-          // header (mirrors the native MCP / OMO-Slim section headers).
-          // Absent key reads as expanded, matching pre-0.7.9 behavior.
-          statsBlockCollapsed: false
-        }
-      });
-      settingsStore = s ?? {};
-      updateSettingsStore = u;
-    } else {
-      console.error("[usage-meter] storage.store unavailable \u2014 settings will not persist");
+  const { state: settingsStore, update: updateSettingsStore } = openStore(
+    context,
+    "usage-meter.settings",
+    {
+      hitScope: "today",
+      // v0.7.0: the footer defaults to waited + tok/s only; the Σ and
+      // hit segments are opt-in. The right-sidebar metrics block is on
+      // by default. Absent keys fall back to these defaults on read.
+      footerSigma: false,
+      footerHit: false,
+      sidebarMetrics: true,
+      // v0.7.7: rolling secondary dimension for the Σ/📊 total
+      // (today | last 24h | last 7d | last 30d). Absent key reads as
+      // "today", matching pre-0.7.7 behavior.
+      totalScope: "today",
+      // v0.7.9: click-to-collapse state of the right-sidebar Stats
+      // header (mirrors the native MCP / OMO-Slim section headers).
+      // Absent key reads as expanded, matching pre-0.7.9 behavior.
+      statsBlockCollapsed: false
     }
-  } catch (error) {
-    console.error("[usage-meter] settings store creation failed:", error);
-  }
+  );
   const hitScopeEnabled = () => settingsStore?.hitScope === "session" ? "session" : "today";
   const totalScopeEnabled = () => TOTAL_SCOPES.includes(settingsStore?.totalScope) ? settingsStore.totalScope : "today";
   const footerSigmaEnabled = () => settingsStore?.footerSigma === true;
@@ -150,8 +150,7 @@ function createSettings(context) {
     } catch {
     }
   };
-  const release = () => {
-  };
+  const release = noopRelease;
   return {
     settingsStore,
     updateSettings: updateSettingsStore,
@@ -538,8 +537,8 @@ function createSessionMetrics(deps) {
   const onStepStarted = (event) => {
     const sessionID = sessionIDOf(event);
     const data = dataOf(event);
-    const started = data?.started;
-    if (sessionID && Number.isFinite(started) && !starts.has(sessionID)) {
+    const started = tsOf(data?.started);
+    if (sessionID && started !== void 0 && !starts.has(sessionID)) {
       lastExactRates.delete(sessionID);
       lastAvgRates.delete(sessionID);
       lastLiveRates.delete(sessionID);
@@ -654,6 +653,34 @@ function createSessionMetrics(deps) {
   };
 }
 
+// src/layer-lifecycle.ts
+function shouldAttemptLayerCreate(now, layerDispose, layerFailureAt, intervalMs) {
+  return layerDispose === void 0 && (layerFailureAt === 0 || now - layerFailureAt >= intervalMs);
+}
+function createDisposableLayer() {
+  let handle;
+  return {
+    current: () => handle,
+    set: (next) => {
+      handle = next;
+    },
+    dispose: () => {
+      if (typeof handle === "function") {
+        try {
+          handle();
+        } catch {
+        }
+      } else if (handle && typeof handle.dispose === "function") {
+        try {
+          handle.dispose();
+        } catch {
+        }
+      }
+      handle = void 0;
+    }
+  };
+}
+
 // src/panel-content.ts
 import { createSignal as createSignal2 } from "solid-js";
 
@@ -666,6 +693,23 @@ var dailyHitRatio = (cacheRead, input) => {
   const denominator = cacheRead + input;
   return denominator > 0 ? cacheRead / denominator : void 0;
 };
+
+// src/session-context.ts
+function currentSessionID(context, slotProps) {
+  try {
+    const route = context.ui?.router?.current?.();
+    return slotProps?.sessionID ?? (route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID);
+  } catch {
+    return void 0;
+  }
+}
+function isSessionRunning(context, sessionID) {
+  try {
+    return context.data?.session?.status?.(sessionID) === "running";
+  } catch {
+    return false;
+  }
+}
 
 // src/panel-content.ts
 var PANEL_NAME = "usage-meter.stats";
@@ -718,6 +762,7 @@ function createPanelContent(deps) {
       while (queue.length > 0 && found.length < 200) {
         const parentID = queue.shift();
         for (const s of all) {
+          if (found.length >= 200) break;
           if (s?.parentID !== parentID || seen.has(s.id)) continue;
           seen.add(s.id);
           found.push(s);
@@ -823,11 +868,7 @@ function createPanelContent(deps) {
   const sessionLines = (sessionID) => {
     if (!sessionID) return [];
     const lines = ["\u2500\u2500 \u5F53\u524D\u4F1A\u8BDD \u2500\u2500"];
-    let running = false;
-    try {
-      running = context.data?.session?.status?.(sessionID) === "running";
-    } catch {
-    }
+    const running = isSessionRunning(context, sessionID);
     const started = starts.get(sessionID);
     const last = lastDurations.get(sessionID);
     const currentTime = now();
@@ -1004,12 +1045,7 @@ function createStatsPanel(deps) {
       opened = false;
     }
     if (opened !== true) {
-      let sid;
-      try {
-        const route = context.ui?.router?.current?.();
-        sid = route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID;
-      } catch {
-      }
+      const sid = currentSessionID(context);
       try {
         context.ui.dialog.set({ size: "large", centered: true });
       } catch {
@@ -1026,47 +1062,36 @@ function createStatsPanel(deps) {
     }
     void ensureDetail();
   };
-  let fullscreenLayerDispose;
   let currentFullscreenPanel;
+  const fullscreenLayer = createDisposableLayer();
   const StatsPanel = (props) => {
     currentFullscreenPanel = props.panel;
-    if (fullscreenLayerDispose === void 0) {
+    if (fullscreenLayer.current() === void 0) {
       try {
-        fullscreenLayerDispose = context.keymap?.layer?.(() => ({
-          commands: [
-            {
-              id: "usage-meter.stats.fullscreen",
-              title: "\u7EDF\u8BA1\u9762\u677F\u5168\u5C4F",
-              bind: "f",
-              run: () => {
-                try {
-                  currentFullscreenPanel?.toggleFullscreen?.();
-                } catch {
+        fullscreenLayer.set(
+          context.keymap?.layer?.(() => ({
+            commands: [
+              {
+                id: "usage-meter.stats.fullscreen",
+                title: "\u7EDF\u8BA1\u9762\u677F\u5168\u5C4F",
+                bind: "f",
+                run: () => {
+                  try {
+                    currentFullscreenPanel?.toggleFullscreen?.();
+                  } catch {
+                  }
                 }
               }
-            }
-          ]
-        }));
+            ]
+          }))
+        );
       } catch {
-        fullscreenLayerDispose = null;
+        fullscreenLayer.set(null);
       }
     }
     return /* @__PURE__ */ jsx(StatsBody, { sessionID: props.panel?.sessionID });
   };
-  const disposeFullscreenLayer = () => {
-    if (typeof fullscreenLayerDispose === "function") {
-      try {
-        fullscreenLayerDispose();
-      } catch {
-      }
-    } else if (fullscreenLayerDispose && typeof fullscreenLayerDispose.dispose === "function") {
-      try {
-        fullscreenLayerDispose.dispose();
-      } catch {
-      }
-    }
-    fullscreenLayerDispose = void 0;
-  };
+  const disposeFullscreenLayer = fullscreenLayer.dispose;
   return { StatsBody, StatsPanel, runTokensCommand, disposeFullscreenLayer };
 }
 
@@ -1085,11 +1110,11 @@ function createSettingsDialog(deps) {
     toggleHitScope,
     cycleTotalScope
   } = deps.settings;
-  let keymapLayerDispose;
+  const keymapLayer = createDisposableLayer();
   const SettingsBody = () => {
-    if (keymapLayerDispose === void 0) {
+    if (keymapLayer.current() === void 0) {
       try {
-        keymapLayerDispose = context.keymap?.layer?.(() => ({
+        const created = context.keymap?.layer?.(() => ({
           commands: [
             {
               id: "usage-meter.settings.toggle-hit",
@@ -1130,8 +1155,9 @@ function createSettingsDialog(deps) {
             }
           ]
         }));
+        keymapLayer.set(created);
       } catch {
-        keymapLayerDispose = null;
+        keymapLayer.set(null);
       }
     }
     const lines = createMemo2(() => {
@@ -1155,27 +1181,21 @@ function createSettingsDialog(deps) {
     });
     return /* @__PURE__ */ jsx2("text", { fg: context.theme?.text?.base, children: () => lines().join("\n") });
   };
-  const disposeKeymapLayer = () => {
-    if (typeof keymapLayerDispose === "function") {
-      try {
-        keymapLayerDispose();
-      } catch {
-      }
-    } else if (keymapLayerDispose && typeof keymapLayerDispose.dispose === "function") {
-      try {
-        keymapLayerDispose.dispose();
-      } catch {
-      }
-    }
-    keymapLayerDispose = void 0;
-  };
+  const disposeKeymapLayer = keymapLayer.dispose;
   return { SettingsBody, disposeKeymapLayer };
 }
 
 // src/components/sidebar-metrics.tsx
 import { createMemo as createMemo3 } from "solid-js";
 
+// src/text-attributes.ts
+var DIM_TEXT_ATTRIBUTE = 1 << 1;
+
 // src/live-rate.ts
+function liveRateDisplayValue(liveTokensPerSecond, calibrationFactor) {
+  if (liveTokensPerSecond === void 0) return void 0;
+  return Math.max(1, Math.round(liveTokensPerSecond * calibrationFactor));
+}
 function resolveLiveRateReading(memory, sessionID, turnStartedAt, liveTokensPerSecond) {
   if (liveTokensPerSecond !== void 0) {
     memory.set(sessionID, { turnStartedAt, tokensPerSecond: liveTokensPerSecond });
@@ -1186,8 +1206,76 @@ function resolveLiveRateReading(memory, sessionID, turnStartedAt, liveTokensPerS
   return { tokensPerSecond: held.tokensPerSecond, dim: true };
 }
 
-// src/text-attributes.ts
-var DIM_TEXT_ATTRIBUTE = 1 << 1;
+// src/sidebar-block.ts
+function composeSidebarBlock(sources) {
+  const currentTime = sources.now();
+  const collapsed = sources.collapsed();
+  const lines = [];
+  if (!collapsed) {
+    const running = sources.running();
+    const started = sources.started();
+    const last = sources.last();
+    if (running && started !== void 0) {
+      lines.push({ text: `\u23F1 ${format(currentTime - started)}`, dim: false });
+      const reading = resolveLiveRateReading(
+        sources.liveMemory,
+        sources.sessionID,
+        started,
+        liveRateDisplayValue(sources.liveTokensPerSecond(currentTime), sources.calibrationFactor())
+      );
+      if (reading !== void 0) {
+        lines.push({ text: `\u26A1 ${reading.tokensPerSecond} tok/s`, dim: reading.dim });
+      }
+    } else if (running) {
+      lines.push({ text: "\u23F3", dim: false });
+    } else if (last !== void 0) {
+      lines.push({ text: `\u{1F3C1} ${format(last)}`, dim: false });
+      const exact = sources.exactRate();
+      const avgRate = sources.avgRate();
+      if (exact !== void 0) lines.push({ text: `\u26A1 ${exact} tok/s`, dim: false });
+      else if (avgRate !== void 0) lines.push({ text: `\u26A1 ${avgRate} tok/s avg`, dim: false });
+    }
+    const stats = sources.todayStats();
+    const hitScope = sources.hitScope();
+    const totalScope = sources.totalScope();
+    const scopeStats = sources.scopeStats(totalScope);
+    if (scopeStats) {
+      const scopeTokens = scopeStats?.tokens;
+      const freshTokensTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
+      const cacheInclusiveTotal = freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0);
+      if (freshTokensTotal > 0) {
+        lines.push({
+          text: cacheInclusiveTotal > freshTokensTotal ? `\u{1F4CA} ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})` : `\u{1F4CA} ${fmtNum(freshTokensTotal)} (${totalScope})`,
+          dim: false
+        });
+      }
+    }
+    if (hitScope === "session") {
+      const sessionTokens = sources.sessionTokens();
+      const sessionRatio = sessionHitRatio(
+        sessionTokens?.cache?.read ?? 0,
+        sessionTokens?.input ?? 0,
+        sessionTokens?.cache?.write ?? 0
+      );
+      if (sessionRatio !== void 0)
+        lines.push({ text: `\u{1F3AF} ${(sessionRatio * 100).toFixed(1)}% (session)`, dim: false });
+    } else if (stats) {
+      const dailyRatio = dailyHitRatio(
+        stats?.tokens?.cache?.read ?? 0,
+        stats?.tokens?.input ?? 0
+      );
+      if (dailyRatio !== void 0)
+        lines.push({ text: `\u{1F3AF} ${(dailyRatio * 100).toFixed(1)}% (today)`, dim: false });
+    }
+  }
+  return { collapsed, lines };
+}
+function shouldShowSidebarBlock(sidebarMetricsEnabled, readState, readTick) {
+  readTick();
+  if (!sidebarMetricsEnabled()) return false;
+  const state = readState();
+  return state.collapsed || state.lines.length > 0;
+}
 
 // src/components/sidebar-metrics.tsx
 import { jsx as jsx3, jsxs } from "@opentui/solid/jsx-runtime";
@@ -1214,84 +1302,38 @@ function createSidebarMetrics(deps) {
   const SidebarMetrics = (props) => {
     const sessionID = props.sessionID;
     backfillLastTurn(sessionID);
-    const blockState = createMemo3(() => {
-      const currentTime = now();
-      const collapsed = statsBlockCollapsed();
-      const blockLines = [];
-      if (!collapsed) {
-        let running = false;
-        try {
-          running = context.data?.session?.status?.(sessionID) === "running";
-        } catch {
-        }
-        const started = starts.get(sessionID);
-        const last = lastDurations.get(sessionID);
-        if (running && started !== void 0) {
-          blockLines.push({ text: `\u23F1 ${format(currentTime - started)}`, dim: false });
+    const blockState = createMemo3(
+      () => composeSidebarBlock({
+        now,
+        collapsed: statsBlockCollapsed,
+        running: () => isSessionRunning(context, sessionID),
+        started: () => starts.get(sessionID),
+        last: () => lastDurations.get(sessionID),
+        exactRate: () => lastExactRates.get(sessionID),
+        avgRate: () => lastAvgRates.get(sessionID),
+        liveTokensPerSecond: (currentTime) => {
           const rate = rates.get(sessionID);
-          const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : void 0;
-          const reading = resolveLiveRateReading(
-            lastLiveRates,
-            sessionID,
-            started,
-            liveTokensPerSecond === void 0 ? void 0 : Math.round(liveTokensPerSecond * calibOf(sessionID))
-          );
-          if (reading !== void 0) {
-            blockLines.push({ text: `\u26A1 ${reading.tokensPerSecond} tok/s`, dim: reading.dim });
-          }
-        } else if (running) {
-          blockLines.push({ text: "\u23F3", dim: false });
-        } else if (last !== void 0) {
-          blockLines.push({ text: `\u{1F3C1} ${format(last)}`, dim: false });
-          const exact = lastExactRates.get(sessionID);
-          const avgRate = lastAvgRates.get(sessionID);
-          if (exact !== void 0) blockLines.push({ text: `\u26A1 ${exact} tok/s`, dim: false });
-          else if (avgRate !== void 0)
-            blockLines.push({ text: `\u26A1 ${avgRate} tok/s avg`, dim: false });
-        }
-        const stats = todayStats();
-        const hitScope = hitScopeEnabled();
-        const totalScope = totalScopeEnabled();
-        const scopeStats = totalFor(totalScope);
-        if (scopeStats) {
-          const scopeTokens = scopeStats?.tokens;
-          const freshTokensTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
-          const cacheInclusiveTotal = freshTokensTotal + (scopeTokens?.cache?.read ?? 0) + (scopeTokens?.cache?.write ?? 0);
-          if (freshTokensTotal > 0) {
-            blockLines.push({
-              text: cacheInclusiveTotal > freshTokensTotal ? `\u{1F4CA} ${fmtNum(freshTokensTotal)} / ${fmtNum(cacheInclusiveTotal)} (${totalScope})` : `\u{1F4CA} ${fmtNum(freshTokensTotal)} (${totalScope})`,
-              dim: false
-            });
-          }
-        }
-        if (hitScope === "session") {
+          return rate ? liveRate(rate, currentTime) : void 0;
+        },
+        calibrationFactor: () => calibOf(sessionID),
+        liveMemory: lastLiveRates,
+        sessionID,
+        todayStats,
+        hitScope: hitScopeEnabled,
+        totalScope: totalScopeEnabled,
+        scopeStats: (scope) => totalFor(scope),
+        sessionTokens: () => {
           try {
-            const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens;
-            const sessionRatio = sessionHitRatio(
-              sessionTokens?.cache?.read ?? 0,
-              sessionTokens?.input ?? 0,
-              sessionTokens?.cache?.write ?? 0
-            );
-            if (sessionRatio !== void 0)
-              blockLines.push({
-                text: `\u{1F3AF} ${(sessionRatio * 100).toFixed(1)}% (session)`,
-                dim: false
-              });
+            return context.data?.session?.get?.(sessionID)?.tokens;
           } catch {
+            return void 0;
           }
-        } else if (stats) {
-          const dailyRatio = dailyHitRatio(stats?.tokens?.cache?.read ?? 0, stats?.tokens?.input ?? 0);
-          if (dailyRatio !== void 0)
-            blockLines.push({ text: `\u{1F3AF} ${(dailyRatio * 100).toFixed(1)}% (today)`, dim: false });
         }
-      }
-      return { collapsed, lines: blockLines };
-    });
-    const hasContent = createMemo3(() => {
-      if (!sidebarMetricsEnabled()) return false;
-      const state = blockState();
-      return state.collapsed || state.lines.length > 0;
-    });
+      })
+    );
+    const hasContent = createMemo3(
+      () => shouldShowSidebarBlock(sidebarMetricsEnabled, blockState, now)
+    );
     const base = context.theme?.text?.base;
     const muted = context.theme?.text?.muted;
     return /* @__PURE__ */ jsxs("box", { flexDirection: "column", children: [
@@ -1326,6 +1368,60 @@ function createSidebarMetrics(deps) {
 import { createMemo as createMemo4 } from "solid-js";
 
 // src/footer-runs.ts
+function composeFooterSegments(sources) {
+  const parts = [];
+  if (sources.running && sources.started !== void 0) {
+    parts.push({ text: `\u23F1 ${format(sources.now - sources.started)}` });
+    const reading = resolveLiveRateReading(
+      sources.liveMemory,
+      sources.sessionID,
+      sources.started,
+      liveRateDisplayValue(sources.liveTokensPerSecond, sources.calibrationFactor)
+    );
+    if (reading !== void 0) {
+      const segment = { text: `\u26A1 ${reading.tokensPerSecond} tok/s` };
+      if (reading.dim) segment.dim = true;
+      parts.push(segment);
+    }
+  } else if (sources.running) {
+    parts.push({ text: `\u23F3` });
+  } else if (sources.last !== void 0) {
+    parts.push({ text: `\u{1F3C1} ${format(sources.last)}` });
+    if (sources.exactRate !== void 0) {
+      parts.push({ text: `\u26A1 ${sources.exactRate} tok/s` });
+    } else if (sources.avgRate !== void 0) {
+      parts.push({ text: `\u26A1 ${sources.avgRate} tok/s avg` });
+    }
+  }
+  if (sources.footerSigmaEnabled && sources.scopeStats) {
+    const scopeTokens = sources.scopeStats?.tokens;
+    const scopeTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
+    if (scopeTotal > 0) {
+      parts.push({
+        text: `\u03A3 ${fmtNum(scopeTotal)}${sources.totalScope === "today" ? "" : ` (${sources.totalScope})`}`
+      });
+    }
+  }
+  if (sources.footerHitEnabled && sources.hitScope === "session") {
+    const sessionTokens = sources.readSessionTokens();
+    const sessionRatio = sessionHitRatio(
+      sessionTokens?.cache?.read ?? 0,
+      sessionTokens?.input ?? 0,
+      sessionTokens?.cache?.write ?? 0
+    );
+    if (sessionRatio !== void 0)
+      parts.push({ text: `hit\xB7s ${(sessionRatio * 100).toFixed(1)}%` });
+  }
+  if (sources.todayStats && sources.footerHitEnabled && sources.hitScope !== "session") {
+    const dailyRatio = dailyHitRatio(
+      sources.todayStats?.tokens?.cache?.read ?? 0,
+      sources.todayStats?.tokens?.input ?? 0
+    );
+    if (dailyRatio !== void 0)
+      parts.push({ text: `hit ${(dailyRatio * 100).toFixed(1)}%` });
+  }
+  return parts.length > 0 ? parts : null;
+}
 var coalesceFooterRuns = (segments) => {
   const runs = [];
   for (const segment of segments) {
@@ -1360,86 +1456,44 @@ function createFooterStatus(deps) {
   const { calibOf } = deps.calibration;
   const FooterStatus = (componentProps) => {
     const slotProps = componentProps.slotProps;
-    let sessionID;
-    try {
-      const route = context.ui?.router?.current?.();
-      sessionID = slotProps?.sessionID ?? (route?.type === "session" ? route.sessionID ?? route.params?.sessionID : route?.params?.sessionID);
-    } catch {
-    }
-    if (!sessionID) return null;
-    backfillLastTurn(sessionID);
+    let backfilledSessionID;
     const statusText = createMemo4(() => {
       const currentTime = now();
-      let running = false;
-      try {
-        running = context.data?.session?.status?.(sessionID) === "running";
-      } catch {
+      const sessionID = currentSessionID(context, slotProps);
+      if (!sessionID) return null;
+      if (backfilledSessionID !== sessionID) {
+        backfilledSessionID = sessionID;
+        backfillLastTurn(sessionID);
       }
-      const started = starts.get(sessionID);
-      const last = lastDurations.get(sessionID);
-      const parts = [];
-      if (running && started !== void 0) {
-        parts.push({ text: `\u23F1 ${format(currentTime - started)}` });
-        const rate = rates.get(sessionID);
-        const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : void 0;
-        const reading = resolveLiveRateReading(
-          lastLiveRates,
-          sessionID,
-          started,
-          liveTokensPerSecond === void 0 ? void 0 : Math.round(liveTokensPerSecond * calibOf(sessionID))
-        );
-        if (reading !== void 0) {
-          const segment = { text: `\u26A1 ${reading.tokensPerSecond} tok/s` };
-          if (reading.dim) segment.dim = true;
-          parts.push(segment);
-        }
-      } else if (running) {
-        parts.push({ text: `\u23F3` });
-      } else if (last !== void 0) {
-        parts.push({ text: `\u{1F3C1} ${format(last)}` });
-        const exact = lastExactRates.get(sessionID);
-        if (exact !== void 0) {
-          parts.push({ text: `\u26A1 ${exact} tok/s` });
-        } else {
-          const avg = lastAvgRates.get(sessionID);
-          if (avg !== void 0) parts.push({ text: `\u26A1 ${avg} tok/s avg` });
-        }
-      }
+      const rate = rates.get(sessionID);
+      const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : void 0;
       const totalScope = totalScopeEnabled();
       const scopeStats = totalFor(totalScope);
-      if (footerSigmaEnabled() && scopeStats) {
-        const scopeTokens = scopeStats?.tokens;
-        const scopeTotal = (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0);
-        if (scopeTotal > 0) {
-          parts.push({
-            text: `\u03A3 ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`
-          });
-        }
-      }
-      const hitScope = hitScopeEnabled();
-      const showHitInFooter = footerHitEnabled();
-      if (showHitInFooter && hitScope === "session") {
-        try {
-          const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens;
-          const sessionRatio = sessionHitRatio(
-            sessionTokens?.cache?.read ?? 0,
-            sessionTokens?.input ?? 0,
-            sessionTokens?.cache?.write ?? 0
-          );
-          if (sessionRatio !== void 0)
-            parts.push({ text: `hit\xB7s ${(sessionRatio * 100).toFixed(1)}%` });
-        } catch {
-        }
-      }
-      const stats = todayStats();
-      if (stats) {
-        const todayTokens = stats?.tokens;
-        if (showHitInFooter && hitScope !== "session") {
-          const dailyRatio = dailyHitRatio(todayTokens?.cache?.read ?? 0, todayTokens?.input ?? 0);
-          if (dailyRatio !== void 0) parts.push({ text: `hit ${(dailyRatio * 100).toFixed(1)}%` });
-        }
-      }
-      return parts.length > 0 ? parts : null;
+      return composeFooterSegments({
+        now: currentTime,
+        running: isSessionRunning(context, sessionID),
+        started: starts.get(sessionID),
+        last: lastDurations.get(sessionID),
+        exactRate: lastExactRates.get(sessionID),
+        avgRate: lastAvgRates.get(sessionID),
+        liveTokensPerSecond,
+        calibrationFactor: calibOf(sessionID),
+        liveMemory: lastLiveRates,
+        sessionID,
+        footerSigmaEnabled: footerSigmaEnabled(),
+        totalScope,
+        scopeStats,
+        footerHitEnabled: footerHitEnabled(),
+        hitScope: hitScopeEnabled(),
+        readSessionTokens: () => {
+          try {
+            return context.data?.session?.get?.(sessionID)?.tokens;
+          } catch {
+            return void 0;
+          }
+        },
+        todayStats: todayStats()
+      });
     });
     const muted = context.theme?.text?.muted;
     return /* @__PURE__ */ jsx4("box", { flexDirection: "row", children: () => {
@@ -1606,7 +1660,12 @@ var tui_default = Plugin.define({
       unregisterAppSlot = context.ui.slot({
         append: "app",
         render: () => {
-          const retryDue = layerDispose === void 0 && (layerFailureAt === 0 || Date.now() - layerFailureAt >= LAYER_RETRY_INTERVAL_MS);
+          const retryDue = shouldAttemptLayerCreate(
+            Date.now(),
+            layerDispose,
+            layerFailureAt,
+            LAYER_RETRY_INTERVAL_MS
+          );
           if (retryDue) {
             try {
               const created = context.keymap?.layer?.(() => ({

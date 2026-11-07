@@ -1,6 +1,6 @@
 # OpenCode V2 TUI 插件开发避坑清单
 
-来自 opencode-usage-meter 0.6.x → 0.7.11 的真实踩坑记录(每条都有实证取证),面向所有写 TUI 插件(`@opencode/plugin/tui` + @opentui/solid)的开发者。按"会让你调一下午"的程度排序。
+来自 opencode-usage-meter 0.6.x → 0.7.25+ 的真实踩坑记录(每条都有实证取证),面向所有写 TUI 插件(`@opencode/plugin/tui` + @opentui/solid)的开发者。按"会让你调一下午"的程度排序。
 
 ---
 
@@ -67,7 +67,7 @@ context.ui.slot({
 
 ### 3a. 槽位边界的函数子节点救不了组件体内部(0.7.16 真机证实)
 
-**症状**:右栏 Stats 点击 ▼/▸ 不即时展开/收起,切换 session 才生效;空闲时右栏 ⏱ 也不走秒。0.7.10-0.7.15 四轮修复全部只过代码审查,真机从未通过。**0.7.16 真机修订**:footer 空闲同样不走秒,且流式输出期间(宿主高频重绘)数值全程停在挂载期快照——此前"footer 正常"是输入/重挂掩盖的假象,footer 从来不是可靠基线(见第 3 条末注)。本条的"插值 vs 函数子节点"结论只覆盖 JSX 消费层;冻结的更上游根因(插件侧 solid 无效,server 构建/实例分裂二选一)见 #13(0.7.17-probe 定案中)。
+**症状**:右栏 Stats 点击 ▼/▸ 不即时展开/收起,切换 session 才生效;空闲时右栏 ⏱ 也不走秒。0.7.10-0.7.15 四轮修复全部只过代码审查,真机从未通过。**0.7.16 真机修订**:footer 空闲同样不走秒,且流式输出期间(宿主高频重绘)数值全程停在挂载期快照——此前"footer 正常"是输入/重挂掩盖的假象,footer 从来不是可靠基线(见第 3 条末注)。本条的"插值 vs 函数子节点"结论只覆盖 JSX 消费层;冻结的更上游根因(效应归属与模块图)见 #13(已定案)。
 
 **根因**:`createComponent` 对组件函数体 `untrack`(solid.js:`return untrack(() => Comp(props))`)——槽位渲染层的函数子节点包裹确实为**它自己**建了 render effect,但该 effect 的全部工作只是调用一次 `<SidebarMetrics/>`;组件体内所有 `blockState()` **插值**读取发生在 untrack 作用域里,既不注册到外层 effect、也不在任何自身 effect 内,树从挂载起冻结,`requestRender` 画的永远是同一棵树。切 session 触发宿主重挂、组件体重跑,才读到新值——症状"要切 session"正源于此。
 
@@ -155,9 +155,16 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 *实证来源:opencode-usage-meter 0.7.8/0.7.10/0.7.11 三轮修复;OMO-Slim 落盘包对照;@opentui/solid 0.4.5/0.5.14 源码;8 个无头探针脚本。相关决策记录见 [../decisions/changelog.md](../decisions/changelog.md)。*
 
-## 13. "谁插入函数子节点,谁拥有渲染 effect"——插件 slot 不许把函数子节点交给宿主去插(0.7.22 机制终版)
+## 13. 函数子节点的 effect 归属:插件 slot 不许把函数子节点交给宿主去插(机制终版 0.7.22 → 0.7.24 → 0.7.25)
+
+**当前结论**:slot render 直接返回含函数子节点的 JSX 时,执行 `insertExpression` 的是**宿主**(用宿主自己的 @opentui/solid 与宿主图),渲染 effect 落在宿主图里,插件的 memo(插件图)永远订阅不进去——树自挂载起就是挂载期快照。正确姿势:插件用**自己的** `@opentui/solid` 的 `insert`,把 render 函数插进自己 `createElement("box")` 的 root(OMO-Slim `reactiveElement` 逐字同款,**无 createRoot**),再把普通 Renderable 交给宿主——effect 全活在插件图里(实现:`src/reactive-mount.ts`)。这一条必须与 #14(不声明 peers、裸 specifier)和 #16(预编译单文件、裸导入提升到入口顶层)合起来看:三者共同保证插件代码与宿主 slot 机制处于**同一个模块图**,缺一即冻(0.7.25 真机终验闭环)。
+
+以下为演进史(中间结论多已被推翻,留作排查线索):
 
 **症状**:空闲 footer/右栏全部冻结在挂载期快照;流式期间宿主高频重绘也不救;点击的本地 signal 翻转 + 立即 requestRender 同样不生效;只有切走再切回(重挂)刷新。屏幕有两种表现、同一条根因链:挂载时数据已就绪 → 显示冻结旧值(⏱ 定格不走秒、tok/s 停旧值);挂载时无数据 → 相关段按设计隐藏且永不出现(footer 指标整段不见、右栏 tok/s "消失"、轮次中重挂时定格"运行中但速率未播种"瞬态)。另:`requestRender` 每拍都被调、探针里 memo 重算上万次——树死但插件侧全活。
+
+<details>
+<summary>历史注脚:0.7.20 → 0.7.24 三轮真机探针 + 源码取证</summary>
 
 **机制链(0.7.20-0.7.22 三轮真机探针 + 源码取证)**:① **H1 证伪**——宿主 bun 把裸 `"solid-js"` 解析成可用响应式构建(SSR 空函数论不成立);② **同构建双模块实例确实存在且必须消除**——solid 的响应式全局(observer 栈)每模块实例私有,跨实例订阅登记不进;0.7.21 统一 `dist/solid.js` 后探针 `bareSignalEqDist:true`,但**叶子 thunk 仍只等于重挂数**——实例统一是必要非充分;③ **终版根因 = effect 归属**:slot render 直接返回含函数子节点的 JSX 时,执行 insertExpression 的是**宿主**——用宿主自己的 @opentui/solid 拷贝和宿主图里的 solid 实例建 createRenderEffect;插件 memo 在插件图里,跨图订阅失败,叶子 thunk 只在挂载时求值一次。0.7.10/0.7.16 的"函数子节点包裹"修复依赖"谁挂树谁建 effect",而真机上挂树的永远是宿主——这就是四轮代码审查全过、真机全冻的原因。OMO-Slim 落盘包实证活体模式:`reactiveElement` 返回前用**自己的** @opentui/solid `insert` 把 render 函数插进 core box,effect 全部活在自己图里,宿主只拿到普通 Renderable。
 
@@ -167,15 +174,26 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 
 **0.7.24 终案——问题根本不在 createRoot,在"寄生拷贝"**:0.7.23(getOwner 继承)真机**仍然崩**,且探针 `otuiEffectEqDist:false` 早已示警:@opentui/solid 内部的 solid 实例与我们 src 的 dist 导入**从来不是同一个**(0.5.17 的 stamp 里 @opentui/solid 自带嵌套 solid-js)。决定性对照:**OMO-Slim 的 stamp 里既没有 @opentui/solid 也没有 solid-js**,其 `import { createElement, insert, setProp } from "@opentui/solid"` 与 `import { createSignal } from "solid-js"`(裸 specifier)解析到**宿主为插件 TUI 代码外置提供的模块**——与宿主 slot 机制同一个图,RendererContext/owner 链天然在场,`reactiveElement`(无 createRoot,ambient 位置 createElement+insert)活体。而我们 0.7.20 钉的 peerDependencies 让 stamp 装了**本地寄生拷贝**:我们的全部导入落在寄生拷贝上,寄生 solid 的 Owner 在宿主调 slot render 时永远是 null → `No renderer found` 必炸。修复(0.7.24):**peerDependencies 整体移除**(寄生拷贝不再安装,运行时解析落宿主拷贝)、src 全部 solid 导入改回裸 `"solid-js"`(宿主别名只证过裸 specifier;`dist/solid.js` 子路径未证)、reactive-mount 改为 OMO `reactiveElement` 逐字同款(无 createRoot——统一图下宿主 slot 机制的计算树负责生命周期,重挂时 solid 会 dispose 旧 owned effect 链)。探针(0.7.17-0.7.23)随之整体 revert,唯 tick 全包 try/catch 保留为永久改进。
 
-## 14. peerDependencies 开放范围会在某次 update 时突然解析到上游新大版本(0.7.19 真机失败实证)
+</details>
+
+## 14. TUI 插件不要声明 @opentui/* 与 solid-js 依赖(0.7.19 失败实证 → 0.7.24 定版)
+
+**当前结论**:TUI 插件**不声明、不安装** `@opentui/core`、`@opentui/solid`、`solid-js` 的任何依赖条目(OMO-Slim 同款)。宿主为插件 TUI 代码**外置提供**这些模块;src 里一律用**裸 specifier** 导入(`"solid-js"` / `"@opentui/solid"`,不要用 `solid-js/dist/solid.js` 这类子路径)。只要声明了它们,`plugin update` 的落盘 stamp 就会装出**本地寄生拷贝**,插件全部导入落在与宿主 slot 机制不同的模块图上——与 #13 的冻结同源。它"最响的一种死法"是开放范围 peer 在某次 update 解析到上游新大版本、直接炸加载(0.7.19)。本地开发/UT 只 import 纯逻辑模块、不经 solid,故零 devDependency 也全绿。
+
+以下为演进史(中间结论多已被推翻,留作排查线索):
 
 **症状**:0.7.19 发版后用户完整重启,插件直接加载失败,宿主日志(stage=load)报 `Environment variable "OPENTUI_FORCE_UNICODE" is already registered with different configuration`——Existing 是 "Force Mode 2026 Unicode support…"(宿主/先加载的 0.5.x 注册的),New 是 "Use the Unicode width method (mode 2027)…"(本插件 stamp 里的 @opentui 0.6.0 注册的)。
+
+<details>
+<summary>历史注脚:0.7.19 → 0.7.24</summary>
 
 **根因链条**:① peerDependencies 写 `>=0.5.8` 开放范围,`plugin update` 每次落盘都按**当时**最新解析——0.7.18 安装时解析到 0.5.17(正常),0.7.19 安装时上游刚发布 0.6.0 就解析到它;② 0.6.0 改了环境变量注册描述;③ 宿主把"同名环境变量、不同注册配置"当**硬失败**,插件在 stage=load 直接中止。本地 bun 单测 probe.ts 完全正常、OMO-Slim 的 tui2.js 也大量用 node:* 内建——两条反证都指向"不是 node: 导入的锅",别被 0.7.19 同批改动的探针文件通道带偏。
 
 **0.7.24 订正——钉版比开放范围更糟:peers 本身就是病根**:0.7.20 钉 `0.5.17` 消除了版本漂移炸加载,但真机新证据(见 #13 0.7.24 终案)表明:**只要 peerDependencies 声明了 @opentui/* 或 solid-js,stamp 就会装出本地拷贝,插件的所有导入便落在与宿主 slot 机制不同的模块图上**——版本漂移炸加载只是它最响的一种死法,更阴的是寄生拷贝让 RendererContext/owner 链永不在场(`No renderer found`)、信号订阅跨图失效(整树冻结)。对照实证:OMO-Slim 的 package.json **完全不声明** @opentui/* 与 solid-js(无 dependencies/peerDependencies/devDependencies 条目),stamp 里也确实没有这些包,运行时裸 specifier(`"solid-js"`、`"@opentui/solid"`)由宿主外置提供、与宿主 slot 机制同图,活体。
 
 **正确姿势(0.7.24 定版)**:TUI 插件**不声明** @opentui/core、@opentui/solid、solid-js 的任何依赖条目——宿主为插件 TUI 代码外置提供它们(OMO-Slim 同款);src 里用**裸 specifier** 导入(`"solid-js"`/`"@opentui/solid"`,勿用 `solid-js/dist/solid.js` 子路径——宿主别名只实证过裸 specifier)。stamp 级 npm 安装没有 node_modules 可解析时,由宿主运行时接管;`@opencode/plugin` 保持在 dependencies。0.7.19 的 env-var 炸加载在此姿势下不复存在(寄生拷贝根本不会安装)。本地开发/UT:测试只 import 纯逻辑模块(format/rate-model/settings/calibration/session-metrics/stats-source),不经 solid,零 devDependency 也全绿;esbuild bundle 校验用 `--external:@opentui/* --external:solid-js` 免本地解析。
+
+</details>
 
 ## 15. prerelease 版本号会让 `plugin update` 无限挂起(0.7.17-probe 实证,0.7.20 后补录)
 
@@ -186,6 +204,8 @@ opentuiSolid.effect(() => { mySignal() })  // 冻结 → @opentui 的 effect 看
 **正确姿势**:发版版本号**只用平铺 semver 补丁位推进**(0.7.17 → 0.7.18),探针版/试验版也照常占用正式版本号,探针性质写进 commit message 和 changelog 即可。证据链见 [../decisions/changelog.md](../decisions/changelog.md) 0.7.17 条目。
 
 ## 16. 宿主只对"入口级"裸导入提供运行时模块——裸 TSX 多文件入口 stage=load 解析失败(0.7.24 真机证伪,0.7.25 定案)
+
+**当前结论**:TUI 入口**预编译为单文件 ESM bundle**(`npm run build:tui` → `dist/tui.js`,`exports["./tui"]` 指向它,dist 随仓库提交),让 `@opencode/*`/`@opentui/*`/`solid-js` 等裸导入全部提升到**入口顶层**——宿主只对入口级裸导入提供运行时模块,嵌套相对导入链里的裸 specifier 会走 bun native 快路径而解析失败。改 src 后必须重建并提交 dist(交付契约的 staleness 哨兵会拦截)。以下为取证与演进史。
 
 **症状**:0.7.24(移除 peers、全裸 specifier)真机 stage=load 失败,宿主日志报 `Cannot find package '@opentui/solid' imported from ...src\tui.tsx`——footer/右栏全无。而同宿主(v2.0.29)上 OMO-Slim 3.0.1(预编译单文件 bundle、stamp 里没有 @opentui/solid)活体,其裸 `@opentui/solid` 导入能解析。
 

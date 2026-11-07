@@ -40,7 +40,7 @@ flowchart TD
 3. **有效性**:时间跨度 `dt < 0.4s` 或样本不足 2 个 → 不显示;
 4. **输出**:`rate = (last.tok − base.tok) / dt`,四舍五入,`rate ≤ 0` 不显示。
 
-> 以上四条只决定 **`liveRate()` 是否给出数字**(数学层),不再等于"这段在 footer 上是否消失"。0.7.35 起 `liveRate()` 返回空而本轮已有过实时读数时,footer 沿用上次数值并以 DIM 属性淡化(见 [footer.md](../features/footer.md));右栏 `Stats` 块仍按原样隐藏该项。
+> 以上四条只决定 **`liveRate()` 是否给出数字**(数学层),不再等于“这段是否从界面上消失”。0.7.35 起 `liveRate()` 返回空而本轮已有过实时读数时,footer 沿用上次数值并以 DIM 属性淡化;**右栏 `Stats` 块自 0.7.37 起与 footer 完全同步**——保留本轮上次读数并淡化,不再隐藏该项。两处共用 `session-metrics` 的 `lastLiveRates` 与纯函数 `resolveLiveRateReading()`,渲染口径见 [footer.md](../features/footer.md) 与 [sidebar-stats.md](../features/sidebar-stats.md)。
 
 ## 精确化演进(0.6.2 → 0.6.5)
 

@@ -70,6 +70,14 @@ stateDiagram-v2
 - 触发即忘:每次挂载先查守卫(Map 查询)。重试并非每 tick——footer/右栏槽位渲染均经函数子节点包裹(0.7.10/0.7.12),组件体随宿主槽位调用/重挂载执行;0.7.12 起**结构性无望**(列表非空但无 user 锚点)的会话记入负缓存,0.7.13 起为 **60s 重扫窗**(上次尝试 60s 内不重扫、到点放行一次自愈,防消息窗截断/同步滞后毒化判定),瞬态(列表未同步/上轮在别处运行中)不记录、保持重扫直至轮次完成——0.7.5 接手场景不受影响,残余限制见 [known-issues.md](../decisions/known-issues.md)
 
 
+## 渲染期宿主调用防护(0.7.26)
+
+footer 与 `/usage-full` 的两处渲染路径都直接运行在宿主 slot render 调用栈上,宿主客户端调用一旦抛错会毒化整条渲染链。0.7.26 统一加固:
+
+- **`router.current()` 防护**:footer 组件体与 stats-panel 的 `router.current()` 各包 try/catch,stale handle 抛错时降级为 `undefined`(footer 不渲染 / 弹窗容忍缺 sessionID),不再毒化 slot 或产生 unhandledRejection。
+- **sessionID 提取统一为超集**:两处都取 `route.sessionID ?? route.params?.sessionID`(session 路由感知),不再因宿主路由形状变化而以不同方式失效。
+- `session.status()` 读取同样经 try 包裹(0.7.21 起)。
+
 ## 交互时序图
 
 ```mermaid

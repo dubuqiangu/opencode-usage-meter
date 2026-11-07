@@ -30,8 +30,8 @@
 
 | 工具 | 用途 |
 |---|---|
-| `npm test` | 97 例断言用例(node:test 汇总计数 98,`test-loader.mjs` 解析钩子文件本身计 1 条),零依赖(Node ≥22 原生 type stripping) |
-| `pwsh scripts/verify-install.ps1` | 一键安装自验证(发布闭环固定最后一步,见 [AGENTS.md](../../AGENTS.md)) |
+| `npm test` | 约 100 例断言用例(98+ 且随测试增长,不再写死具体数字;`test-loader.mjs` 解析钩子文件本身在 node:test 汇总里计 1 条),零依赖(Node ≥22 原生 type stripping) |
+| `pwsh scripts/verify-install.ps1` | 一键安装自验证——**维护者发布自验证**,必须在仓库根目录运行;普通用户装完无需也无法执行(见 [install.md](../guides/install.md)) |
 
 ## 计时/速率显示判定(footer 与右栏同款逻辑)
 

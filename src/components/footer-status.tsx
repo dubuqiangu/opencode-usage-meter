@@ -12,13 +12,10 @@
 // createMemo that the JSX interpolation reads, so the 500ms tick and the
 // stats signals drive the re-render directly.
 import { createMemo } from "solid-js"
-import { fmtNum, format } from "../format"
-import { dailyHitRatio, sessionHitRatio } from "../hit-rate"
 import { liveRate } from "../rate-model"
-import { resolveLiveRateReading } from "../live-rate"
 import { DIM_TEXT_ATTRIBUTE } from "../text-attributes"
-import { coalesceFooterRuns } from "../footer-runs"
-import type { FooterSegment } from "../footer-runs"
+import { coalesceFooterRuns, composeFooterSegments } from "../footer-runs"
+import { currentSessionID, isSessionRunning } from "../session-context"
 import type { CalibrationApi } from "../calibration"
 import type { SessionMetricsApi } from "../session-metrics"
 import type { SettingsApi } from "../settings"
@@ -85,20 +82,14 @@ export function createFooterStatus(deps: {
     // degrade to undefined. The extraction mirrors stats-panel's superset
     // form (route.sessionID on session routes) so both surfaces survive the
     // same host route shape changes.
-    let sessionID: string | undefined
-    try {
-      const route: any = context.ui?.router?.current?.()
-      sessionID = slotProps?.sessionID
-        ?? (route?.type === "session"
-          ? (route.sessionID ?? route.params?.sessionID)
-          : route?.params?.sessionID)
-    } catch {}
-    if (!sessionID) return null
-
-    // v0.7.5: sessions opened after a TUI restart have no in-memory turn
-    // history yet — replay the last turn from synced records once (guarded,
-    // so repeated host re-mounts stay no-ops).
-    backfillLastTurn(sessionID)
+    // v0.7.38 (B3): the sessionID gate now lives INSIDE the tracked memo
+    // below, not in this body. The body runs inside untrack
+    // (createComponent), so the old `if (!sessionID) return null` froze the
+    // row blank whenever the first frame had no session yet, and it left no
+    // subscribable child node for the 500ms tick to recover. Re-deriving the
+    // id in the memo keeps that node and lets a late slotProps/router answer
+    // heal the row.
+    let backfilledSessionID: string | undefined
 
     // v0.7.8: every dynamic read (now(), session status, stats signals,
     // settings signals) lives inside the memo, so the interpolation below
@@ -107,103 +98,48 @@ export function createFooterStatus(deps: {
     // always-read `now()` re-evaluates the memo every 500ms and picks up
     // their changes, matching the original "tick-driven" design.
     const statusText = createMemo(() => {
+      // B3: read the tick first — the memo must keep its 500ms dependency even
+      // while it has no session to show, otherwise a later sessionID could
+      // never recover the row.
       const currentTime = now()
-      // 0.7.21: the host client's status() can throw (e.g. after a server
-      // restart the client handle can go bad). `?.` only guards a missing
-      // method, not a throwing one — and a throw inside a memo now runs in
-      // the same reactive instance as the reconciler's effects, so it would
-      // poison the render chain. Degrade to "not running" instead.
-      let running = false
-      try {
-        running = context.data?.session?.status?.(sessionID) === "running"
-      } catch {}
-      const started = starts.get(sessionID)
-      const last = lastDurations.get(sessionID)
-
-      const parts: FooterSegment[] = []
-      if (running && started !== undefined) {
-        // v0.7.3: icon-only state labels — ⏱ elapsed while waiting, ⏳ running
-        // without a start timestamp, 🏁 last turn. No textual state words.
-        parts.push({ text: `⏱ ${format(currentTime - started)}` })
-        const rate = rates.get(sessionID)
-        const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : undefined
-        const reading = resolveLiveRateReading(
-          lastLiveRates,
-          sessionID,
-          started,
-          liveTokensPerSecond === undefined
-            ? undefined
-            : Math.round(liveTokensPerSecond * calibOf(sessionID)),
-        )
-        if (reading !== undefined) {
-          const segment: FooterSegment = { text: `⚡ ${reading.tokensPerSecond} tok/s` }
-          // Only set `dim` when true: coalesceFooterRuns groups by strict
-          // equality, and `dim: false` would split off a run from the
-          // neighbouring segments whose flag is `undefined`.
-          if (reading.dim) segment.dim = true
-          parts.push(segment)
-        }
-      } else if (running) {
-        parts.push({ text: `⏳` })
-      } else if (last !== undefined) {
-        // v0.7.2: checkered flag replaces the "✓ last" wording (icon-only
-        // labels, consistent with ⏱/⚡/📊/🎯).
-        parts.push({ text: `🏁 ${format(last)}` })
-        const exact = lastExactRates.get(sessionID)
-        if (exact !== undefined) {
-          parts.push({ text: `⚡ ${exact} tok/s` })
-        } else {
-          const avg = lastAvgRates.get(sessionID)
-          if (avg !== undefined) parts.push({ text: `⚡ ${avg} tok/s avg` })
-        }
+      const sessionID = currentSessionID(context, slotProps)
+      if (!sessionID) return null
+      // v0.7.5: sessions opened after a TUI restart have no in-memory turn
+      // history yet — replay the last turn from synced records once per
+      // session (guarded, so repeated tick reads stay no-ops).
+      if (backfilledSessionID !== sessionID) {
+        backfilledSessionID = sessionID
+        backfillLastTurn(sessionID)
       }
-      // v0.7.0: Σ/hit footer segments are opt-in via /usage-settings (the
-      // footer defaults to waited + tok/s only). The hit scope stays
-      // configurable: "today" (all-session daily aggregate, read/(read+input))
-      // or "session" (strict read/(input+read+write), shown as "hit·s").
-      // Reads are reactive: toggling updates at once.
-      // v0.7.7: the Σ segment follows the persisted total scope (today is the
-      // silent default; rolling windows carry a range tag so the number can't
-      // be misread as "today"). v0.7.12: segment order is now enforced in
-      // both scope branches — Σ always precedes hit (the session branch
-      // used to push hit·s first, drifting from the documented order).
+      const rate = rates.get(sessionID)
+      const liveTokensPerSecond = rate ? liveRate(rate, currentTime) : undefined
       const totalScope = totalScopeEnabled()
       const scopeStats = totalFor(totalScope)
-      if (footerSigmaEnabled() && scopeStats) {
-        const scopeTokens = scopeStats?.tokens
-        const scopeTotal =
-          (scopeTokens?.input ?? 0) + (scopeTokens?.output ?? 0) + (scopeTokens?.reasoning ?? 0)
-        if (scopeTotal > 0) {
-          parts.push({
-            text: `Σ ${fmtNum(scopeTotal)}${totalScope === "today" ? "" : ` (${totalScope})`}`,
-          })
-        }
-      }
-      const hitScope = hitScopeEnabled()
-      const showHitInFooter = footerHitEnabled()
-      if (showHitInFooter && hitScope === "session") {
-        try {
-          const sessionTokens = context.data?.session?.get?.(sessionID)?.tokens
-          const sessionRatio = sessionHitRatio(
-            sessionTokens?.cache?.read ?? 0,
-            sessionTokens?.input ?? 0,
-            sessionTokens?.cache?.write ?? 0,
-          )
-          // One decimal: the daily/session ratio is naturally stable, so an
-          // integer percent looks frozen while the underlying counts move.
-          if (sessionRatio !== undefined)
-            parts.push({ text: `hit·s ${(sessionRatio * 100).toFixed(1)}%` })
-        } catch {}
-      }
-      const stats = todayStats()
-      if (stats) {
-        const todayTokens = stats?.tokens
-        if (showHitInFooter && hitScope !== "session") {
-          const dailyRatio = dailyHitRatio(todayTokens?.cache?.read ?? 0, todayTokens?.input ?? 0)
-          if (dailyRatio !== undefined) parts.push({ text: `hit ${(dailyRatio * 100).toFixed(1)}%` })
-        }
-      }
-      return parts.length > 0 ? parts : null
+      return composeFooterSegments({
+        now: currentTime,
+        running: isSessionRunning(context, sessionID),
+        started: starts.get(sessionID),
+        last: lastDurations.get(sessionID),
+        exactRate: lastExactRates.get(sessionID),
+        avgRate: lastAvgRates.get(sessionID),
+        liveTokensPerSecond,
+        calibrationFactor: calibOf(sessionID),
+        liveMemory: lastLiveRates,
+        sessionID,
+        footerSigmaEnabled: footerSigmaEnabled(),
+        totalScope,
+        scopeStats,
+        footerHitEnabled: footerHitEnabled(),
+        hitScope: hitScopeEnabled(),
+        readSessionTokens: () => {
+          try {
+            return context.data?.session?.get?.(sessionID)?.tokens
+          } catch {
+            return undefined
+          }
+        },
+        todayStats: todayStats(),
+      })
     })
     // v0.7.36: the "nothing to show" gate lives in the child thunk below, not
     // here. This body runs inside untrack (createComponent), so an early

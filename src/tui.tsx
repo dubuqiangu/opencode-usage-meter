@@ -35,6 +35,7 @@ import { createCalibration } from "./calibration"
 import { createSettings } from "./settings"
 import { createStatsSource } from "./stats-source"
 import { createSessionMetrics } from "./session-metrics"
+import { shouldAttemptLayerCreate } from "./layer-lifecycle"
 import { createPanelContent, PANEL_NAME } from "./panel-content"
 import { createStatsPanel } from "./components/stats-panel"
 import { createSettingsDialog } from "./components/settings-dialog"
@@ -208,6 +209,8 @@ export default Plugin.define({
     // land before Keymap.Provider exists). Failures leave the handle
     // undefined and the next app render retries, throttled so a permanently
     // broken host cannot spam the log.
+    // v0.7.38: the retry decision is the pure shouldAttemptLayerCreate helper
+    // (unit-tested in test/layer-lifecycle.test.ts).
     let layerFailureAt = 0
     const LAYER_RETRY_INTERVAL_MS = 5_000
     let unregisterAppSlot: any
@@ -215,9 +218,12 @@ export default Plugin.define({
       unregisterAppSlot = context.ui.slot({
         append: "app",
         render: () => {
-          const retryDue =
-            layerDispose === undefined &&
-            (layerFailureAt === 0 || Date.now() - layerFailureAt >= LAYER_RETRY_INTERVAL_MS)
+          const retryDue = shouldAttemptLayerCreate(
+            Date.now(),
+            layerDispose,
+            layerFailureAt,
+            LAYER_RETRY_INTERVAL_MS,
+          )
           if (retryDue) {
             try {
               const created = (context.keymap as any)?.layer?.(() => ({
